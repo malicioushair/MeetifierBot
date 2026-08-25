@@ -4,9 +4,9 @@ import pytest
 from sqlalchemy import select
 
 from meetifier.db import Database, Event, EventConfirmation, NotificationJob, Subscription, utcnow
-from meetifier.service import (change_event, confirm_event, confirmations_for_event, create_calendar, create_events,
-                               display_time, local_to_utc, make_invitation, parse_minutes, set_subscription_state,
-                               subscribe)
+from meetifier.service import (calendar_events, change_event, confirm_event, confirmations_for_event, create_calendar,
+                               create_events, display_time, local_to_utc, make_invitation, parse_minutes,
+                               set_subscription_state, subscribe, week_bounds_utc)
 from meetifier.worker import process_due_jobs
 
 
@@ -95,6 +95,36 @@ async def test_confirmations_cleared_on_reschedule(db):
         await change_event(session, 100, event.id, "2030-01-02 19:00")
         rows = await confirmations_for_event(session, 100, event.id)
     assert rows == []
+
+
+def test_week_bounds_utc():
+    start, end = week_bounds_utc("UTC")
+    assert end > start
+    assert (end - start).days == 7
+
+
+async def test_calendar_events_next(db):
+    calendar = await prepared(db)
+    async with db.sessions() as session:
+        near = (await create_events(session, 100, calendar.id, "Soon", "2030-01-01 18:00", 60))[0]
+        await create_events(session, 100, calendar.id, "Later", "2030-01-08 18:00", 60)
+        next_only = await calendar_events(session, calendar.id, "next", calendar.timezone)
+    assert len(next_only) == 1
+    assert next_only[0].id == near.id
+
+
+async def test_calendar_events_week(db):
+    from unittest.mock import patch
+
+    calendar = await prepared(db)
+    async with db.sessions() as session:
+        await create_events(session, 100, calendar.id, "A", "2030-01-01 18:00", 60)
+        await create_events(session, 100, calendar.id, "B", "2030-01-03 18:00", 60)
+        await create_events(session, 100, calendar.id, "C", "2030-01-08 18:00", 60)
+        bounds = (local_to_utc("2030-01-01 00:00", calendar.timezone), local_to_utc("2030-01-07 00:00", calendar.timezone))
+        with patch("meetifier.service.week_bounds_utc", return_value=bounds):
+            week_all = await calendar_events(session, calendar.id, "week", calendar.timezone)
+    assert len(week_all) == 2
 
 
 async def test_worker_sends_and_records_delivery(db):

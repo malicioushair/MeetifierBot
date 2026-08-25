@@ -63,6 +63,15 @@ def participant_main_menu() -> ReplyKeyboardMarkup:
     )
 
 
+def event_range_keyboard(prefix: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[
+            InlineKeyboardButton(text="Next event", callback_data=f"{prefix}:next"),
+            InlineKeyboardButton(text="This week", callback_data=f"{prefix}:week"),
+        ]]
+    )
+
+
 def calendars_keyboard(calendars: list[Calendar], prefix: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[

@@ -35,6 +35,30 @@ def display_time(value: datetime, timezone_name: str) -> str:
     return aware.strftime("%Y-%m-%d %H:%M") + f" ({timezone_name})"
 
 
+def week_bounds_utc(timezone_name: str) -> tuple[datetime, datetime]:
+    tz = ZoneInfo(timezone_name)
+    now_local = datetime.now(tz)
+    week_start = (now_local - timedelta(days=now_local.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    week_end = week_start + timedelta(days=7)
+    return (
+        week_start.astimezone(timezone.utc).replace(tzinfo=None),
+        week_end.astimezone(timezone.utc).replace(tzinfo=None),
+    )
+
+
+async def calendar_events(session: AsyncSession, calendar_id: int, range_mode: str, timezone_name: str) -> list[Event]:
+    if range_mode not in {"next", "week"}:
+        raise ValueError("Range must be 'next' or 'week'")
+    now = utcnow()
+    query = select(Event).where(Event.calendar_id == calendar_id, Event.status == "active")
+    if range_mode == "next":
+        query = query.where(Event.start_utc > now).order_by(Event.start_utc).limit(1)
+    else:
+        start, end = week_bounds_utc(timezone_name)
+        query = query.where(Event.start_utc >= start, Event.start_utc < end).order_by(Event.start_utc)
+    return list((await session.scalars(query)).all())
+
+
 async def get_or_create_user(session: AsyncSession, telegram_id: int, default_timezone: str) -> User:
     user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
     if not user:
@@ -165,10 +189,25 @@ async def change_event(session: AsyncSession, owner_id: int, event_id: int, new_
     return event
 
 
-async def upcoming_for_user(session: AsyncSession, telegram_id: int, limit: int = 10) -> list[tuple[Event, Calendar]]:
-    rows = await session.execute(select(Event, Calendar).join(Calendar).join(Subscription).join(User).where(
-        User.telegram_id == telegram_id, Subscription.active.is_(True), Event.status == "active",
-        Event.start_utc > utcnow()).order_by(Event.start_utc).limit(limit))
+async def upcoming_for_user(session: AsyncSession, telegram_id: int, range_mode: str = "week",
+                            default_tz: str = "UTC", limit: int = 50) -> list[tuple[Event, Calendar]]:
+    if range_mode not in {"next", "week", "future"}:
+        raise ValueError("Range must be 'next', 'week', or 'future'")
+    user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+    tz = user.timezone if user else default_tz
+    now = utcnow()
+    query = (select(Event, Calendar).join(Calendar).join(Subscription).join(User).where(
+        User.telegram_id == telegram_id, Subscription.active.is_(True), Event.status == "active"))
+    if range_mode == "next":
+        query = query.where(Event.start_utc > now).order_by(Event.start_utc).limit(1)
+    elif range_mode == "week":
+        start, end = week_bounds_utc(tz)
+        query = query.where(Event.start_utc >= start, Event.start_utc < end).order_by(Event.start_utc).limit(limit)
+    elif range_mode == "future":
+        query = query.where(Event.start_utc > now).order_by(Event.start_utc).limit(limit)
+    else:
+        raise ValueError("Range must be 'next', 'week', or 'future'")
+    rows = await session.execute(query)
     return list(rows.tuples())
 
 
@@ -235,8 +274,9 @@ async def confirmed_event_ids(session: AsyncSession, user_id: int, event_ids: li
     return set(rows.all())
 
 
-async def upcoming_for_user_with_status(session: AsyncSession, telegram_id: int, limit: int = 10) -> list[tuple[Event, Calendar, bool]]:
-    rows = await upcoming_for_user(session, telegram_id, limit)
+async def upcoming_for_user_with_status(session: AsyncSession, telegram_id: int, range_mode: str = "week",
+                                        default_tz: str = "UTC") -> list[tuple[Event, Calendar, bool]]:
+    rows = await upcoming_for_user(session, telegram_id, range_mode, default_tz)
     if not rows:
         return []
     user = await session.scalar(select(User).where(User.telegram_id == telegram_id))

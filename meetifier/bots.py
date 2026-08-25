@@ -12,10 +12,11 @@ from .keyboards import (ORGANIZER_BUTTONS, ORG_CALENDARS, ORG_CANCEL, ORG_CONFIR
                         ORG_INVITE, ORG_NEW_CALENDAR, ORG_NEW_EVENT, ORG_RESCHEDULE, PARTICIPANT_BUTTONS, PAR_CONFIRM,
                         PAR_HELP, PAR_MUTE, PAR_REMINDERS, PAR_SUBSCRIPTIONS, PAR_TIMEZONE, PAR_UNMUTE, PAR_UNSUBSCRIBE,
                         PAR_UPCOMING, calendars_keyboard, confirm_cancel_keyboard, event_confirm_keyboard,
-                        events_keyboard, organizer_main_menu, participant_main_menu, upcoming_confirm_keyboard)
-from .service import (change_event, confirm_event, confirmations_for_event, create_calendar, create_events, display_time,
-                      invitation_calendar, make_invitation, set_reminders, set_subscription_state, set_timezone,
-                      subscribe, upcoming_for_user_with_status)
+                        event_range_keyboard, events_keyboard, organizer_main_menu, participant_main_menu,
+                        upcoming_confirm_keyboard)
+from .service import (calendar_events, change_event, confirm_event, confirmations_for_event, create_calendar,
+                      create_events, display_time, invitation_calendar, make_invitation, set_reminders,
+                      set_subscription_state, set_timezone, subscribe, upcoming_for_user_with_status)
 from .states import (OrganizerNewCalendar, OrganizerNewEvent, OrganizerReschedule, ParticipantReminders,
                      ParticipantTimezone)
 
@@ -24,7 +25,7 @@ ORGANIZER_HELP = """Use the menu buttons below, or type commands directly:
 /newcalendar Name | Europe/Moscow
 /calendars
 /newevent CALENDAR_ID | Title | 2026-09-01 18:30 | DURATION_MINUTES | WEEKS
-/events CALENDAR_ID
+/events CALENDAR_ID [next|week]
 /invite CALENDAR_ID
 /reschedule EVENT_ID | 2026-09-02 19:00
 /cancel EVENT_ID
@@ -34,7 +35,7 @@ Use WEEKS=1 for one-time events or 2..52 for weekly recurrence."""
 
 PARTICIPANT_HELP = """Use the menu buttons below, or type commands directly:
 
-/upcoming - next events
+/upcoming [next|week] - upcoming events
 /confirm EVENT_ID - confirm attendance
 /timezone Europe/Moscow
 /reminders CALENDAR_ID 1440,30
@@ -78,6 +79,24 @@ async def fetch_subscribed_calendars(session, telegram_id: int) -> list[tuple[Ca
             User.telegram_id == telegram_id, Subscription.active.is_(True))
     )
     return list(rows.tuples().all())
+
+
+def format_organizer_events(events: list[Event], calendar: Calendar, range_mode: str) -> str:
+    if not events:
+        return "No events for this week." if range_mode == "week" else "No upcoming events."
+    return "\n".join(
+        f"{e.id}: {e.title} — {display_time(e.start_utc, calendar.timezone)} [{e.status}]" for e in events
+    )
+
+
+def format_participant_events(rows: list[tuple[Event, Calendar, bool]], timezone_name: str, range_mode: str) -> str:
+    if not rows:
+        return "No events for this week." if range_mode == "week" else "No upcoming events."
+    lines = []
+    for event, calendar, confirmed in rows:
+        status = " ✅" if confirmed else ""
+        lines.append(f"{event.title} — {display_time(event.start_utc, timezone_name)} ({calendar.name}){status}")
+    return "\n".join(lines)
 
 
 def build_organizer_router(db: Database, settings: Settings, participant_bot: Bot) -> Router:
@@ -171,37 +190,57 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
     @router.message(Command("events"))
     @router.message(F.text == ORG_EVENTS)
     async def events_start(message: Message, state: FSMContext, command: CommandObject | None = None) -> None:
+        await state.clear()
         if command and command.args:
-            await state.clear()
+            parts = command.args.split()
             try:
-                calendar_id = int(command.args.strip())
+                calendar_id = int(parts[0])
+                range_mode = parts[1].lower() if len(parts) > 1 else "week"
+                if range_mode not in {"next", "week"}:
+                    raise ValueError("Range must be 'next' or 'week'")
                 async with db.sessions() as session:
                     calendar = await session.scalar(select(Calendar).join(User).where(
                         Calendar.id == calendar_id, User.telegram_id == message.from_user.id))
                     if not calendar:
                         raise PermissionError("Calendar not found or not owned by you")
-                    rows = await fetch_future_events(session, calendar.id)
+                    rows = await calendar_events(session, calendar.id, range_mode, calendar.timezone)
                 await message.answer(
-                    "\n".join(f"{e.id}: {e.title} — {display_time(e.start_utc, calendar.timezone)} [{e.status}]" for e in rows)
-                    or "No future events.",
+                    format_organizer_events(rows, calendar, range_mode),
                     reply_markup=organizer_main_menu(),
                 )
             except (ValueError, PermissionError) as exc:
                 await message.answer(f"Error: {exc}", reply_markup=organizer_main_menu())
             return
-        await state.clear()
-        await pick_calendar(message, "o_events", "Choose a calendar:")
+        await message.answer("What would you like to see?", reply_markup=event_range_keyboard("o_evt_rng"))
 
-    @router.callback_query(F.data.startswith("o_events:"))
-    async def events_pick(callback: CallbackQuery) -> None:
-        calendar_id = int(callback.data.split(":", 1)[1])
+    @router.callback_query(F.data.startswith("o_evt_rng:"))
+    async def events_range_pick(callback: CallbackQuery) -> None:
+        range_mode = callback.data.split(":", 1)[1]
         async with db.sessions() as session:
-            calendar = await session.get(Calendar, calendar_id)
-            rows = await fetch_future_events(session, calendar_id)
-        text = "\n".join(
-            f"{e.id}: {e.title} — {display_time(e.start_utc, calendar.timezone)} [{e.status}]" for e in rows
-        ) or "No future events."
-        await callback.message.edit_text(text)
+            rows = await fetch_owned_calendars(session, callback.from_user.id)
+        if not rows:
+            await callback.message.edit_text("No calendars yet. Create one first.")
+            await callback.answer()
+            return
+        if len(rows) == 1:
+            calendar = rows[0]
+            events = await calendar_events(session, calendar.id, range_mode, calendar.timezone)
+            await callback.message.edit_text(format_organizer_events(events, calendar, range_mode))
+            await callback.answer()
+            return
+        await callback.message.edit_text(
+            "Choose a calendar:",
+            reply_markup=calendars_keyboard(rows, f"o_evt_cal:{range_mode}"),
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("o_evt_cal:"))
+    async def events_calendar_pick(callback: CallbackQuery) -> None:
+        _, range_mode, calendar_id = callback.data.split(":", 2)
+        async with db.sessions() as session:
+            calendar = await session.get(Calendar, int(calendar_id))
+            rows = await calendar_events(session, calendar.id, range_mode, calendar.timezone)
+        await callback.message.edit_text(format_organizer_events(rows, calendar, range_mode))
         await callback.answer()
 
     @router.message(Command("invite"))
@@ -520,25 +559,40 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
         else:
             await message.answer("Nothing to cancel.")
 
-    async def reply_upcoming(message: Message) -> None:
+    async def reply_upcoming(message: Message, range_mode: str) -> None:
         async with db.sessions() as session:
             user = await session.scalar(select(User).where(User.telegram_id == message.from_user.id))
-            rows = await upcoming_for_user_with_status(session, message.from_user.id)
+            rows = await upcoming_for_user_with_status(
+                session, message.from_user.id, range_mode, settings.default_timezone)
         tz = user.timezone if user else settings.default_timezone
-        lines = []
-        for event, calendar, confirmed in rows:
-            status = " ✅" if confirmed else ""
-            lines.append(f"{event.title} — {display_time(event.start_utc, tz)} ({calendar.name}){status}")
         await message.answer(
-            "\n".join(lines) or "No upcoming events.",
+            format_participant_events(rows, tz, range_mode),
             reply_markup=participant_main_menu(),
         )
 
     @router.message(Command("upcoming"))
     @router.message(F.text == PAR_UPCOMING)
-    async def upcoming(message: Message, state: FSMContext) -> None:
+    async def upcoming(message: Message, state: FSMContext, command: CommandObject | None = None) -> None:
         await state.clear()
-        await reply_upcoming(message)
+        if command and command.args:
+            range_mode = command.args.strip().lower()
+            if range_mode not in {"next", "week"}:
+                await message.answer("Usage: /upcoming [next|week]", reply_markup=participant_main_menu())
+                return
+            await reply_upcoming(message, range_mode)
+            return
+        await message.answer("What would you like to see?", reply_markup=event_range_keyboard("p_up_rng"))
+
+    @router.callback_query(F.data.startswith("p_up_rng:"))
+    async def upcoming_range_pick(callback: CallbackQuery) -> None:
+        range_mode = callback.data.split(":", 1)[1]
+        async with db.sessions() as session:
+            user = await session.scalar(select(User).where(User.telegram_id == callback.from_user.id))
+            rows = await upcoming_for_user_with_status(
+                session, callback.from_user.id, range_mode, settings.default_timezone)
+        tz = user.timezone if user else settings.default_timezone
+        await callback.message.edit_text(format_participant_events(rows, tz, range_mode))
+        await callback.answer()
 
     @router.message(Command("confirm"))
     @router.message(F.text == PAR_CONFIRM)
@@ -548,7 +602,8 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
             await handle_confirm(message.from_user, int(command.args.strip()), message)
             return
         async with db.sessions() as session:
-            rows = await upcoming_for_user_with_status(session, message.from_user.id)
+            rows = await upcoming_for_user_with_status(
+                session, message.from_user.id, "future", settings.default_timezone)
         pending = [(e, c) for e, c, confirmed in rows if not confirmed]
         if not pending:
             await message.answer("No events waiting for confirmation.", reply_markup=participant_main_menu())
