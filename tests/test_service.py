@@ -3,9 +3,10 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select
 
-from meetifier.db import Database, Event, NotificationJob, Subscription, utcnow
-from meetifier.service import (change_event, create_calendar, create_events, display_time, local_to_utc,
-                               make_invitation, parse_minutes, set_subscription_state, subscribe)
+from meetifier.db import Database, Event, EventConfirmation, NotificationJob, Subscription, utcnow
+from meetifier.service import (change_event, confirm_event, confirmations_for_event, create_calendar, create_events,
+                               display_time, local_to_utc, make_invitation, parse_minutes, set_subscription_state,
+                               subscribe)
 from meetifier.worker import process_due_jobs
 
 
@@ -70,6 +71,32 @@ async def test_unsubscribe_obsoletes_jobs(db):
     assert all(job.state == "obsolete" for job in jobs)
 
 
+async def test_confirm_event_notifies_organizer_data(db):
+    calendar = await prepared(db)
+    async with db.sessions() as session:
+        event = (await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60))[0]
+        event_id = event.id
+        confirmed, _, owner, created = await confirm_event(session, 200, event_id, "Alice", "UTC")
+        again, _, _, created_again = await confirm_event(session, 200, event_id, "Alice", "UTC")
+        rows = await confirmations_for_event(session, 100, event_id)
+    assert created
+    assert not created_again
+    assert confirmed.title == "Class"
+    assert owner.telegram_id == 100
+    assert len(rows) == 1
+    assert rows[0].display_name == "Alice"
+
+
+async def test_confirmations_cleared_on_reschedule(db):
+    calendar = await prepared(db)
+    async with db.sessions() as session:
+        event = (await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60))[0]
+        await confirm_event(session, 200, event.id, "Alice", "UTC")
+        await change_event(session, 100, event.id, "2030-01-02 19:00")
+        rows = await confirmations_for_event(session, 100, event.id)
+    assert rows == []
+
+
 async def test_worker_sends_and_records_delivery(db):
     calendar = await prepared(db)
     async with db.sessions() as session:
@@ -80,7 +107,7 @@ async def test_worker_sends_and_records_delivery(db):
 
     class FakeBot:
         sent = []
-        async def send_message(self, telegram_id, text):
+        async def send_message(self, telegram_id, text, **kwargs):
             self.sent.append((telegram_id, text))
 
     bot = FakeBot()

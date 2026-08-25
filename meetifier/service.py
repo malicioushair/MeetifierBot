@@ -9,7 +9,7 @@ from sqlalchemy import and_, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import validate_timezone
-from .db import Calendar, Event, Invitation, NotificationJob, Subscription, User, utcnow
+from .db import Calendar, Event, EventConfirmation, Invitation, NotificationJob, Subscription, User, utcnow
 
 
 def parse_minutes(value: str) -> list[int]:
@@ -154,7 +154,9 @@ async def change_event(session: AsyncSession, owner_id: int, event_id: int, new_
     event.version += 1
     if cancel:
         event.status = "cancelled"
+        await session.execute(delete(EventConfirmation).where(EventConfirmation.event_id == event.id))
     else:
+        await session.execute(delete(EventConfirmation).where(EventConfirmation.event_id == event.id))
         duration = event.end_utc - event.start_utc
         event.start_utc = local_to_utc(new_local_start or "", calendar.timezone)
         event.end_utc = event.start_utc + duration
@@ -194,6 +196,54 @@ async def set_subscription_state(session: AsyncSession, telegram_id: int, calend
             NotificationJob.state == "pending").values(state="obsolete"))
     await session.commit()
     return True
+
+
+async def confirm_event(session: AsyncSession, telegram_id: int, event_id: int, display_name: str,
+                        default_tz: str) -> tuple[Event, Calendar, User, bool]:
+    user = await get_or_create_user(session, telegram_id, default_tz)
+    event = await session.scalar(select(Event).where(Event.id == event_id, Event.status == "active", Event.start_utc > utcnow()))
+    if not event:
+        raise ValueError("Event not found or no longer active")
+    calendar = await session.get(Calendar, event.calendar_id)
+    sub = await session.scalar(select(Subscription).where(
+        Subscription.user_id == user.id, Subscription.calendar_id == calendar.id, Subscription.active.is_(True)))
+    if not sub:
+        raise PermissionError("You are not subscribed to this calendar")
+    existing = await session.scalar(select(EventConfirmation).where(
+        EventConfirmation.event_id == event.id, EventConfirmation.user_id == user.id))
+    if existing:
+        return event, calendar, await session.get(User, calendar.owner_user_id), False
+    session.add(EventConfirmation(event_id=event.id, user_id=user.id, display_name=display_name.strip() or str(telegram_id)))
+    await session.commit()
+    return event, calendar, await session.get(User, calendar.owner_user_id), True
+
+
+async def confirmations_for_event(session: AsyncSession, owner_telegram_id: int, event_id: int) -> list[EventConfirmation]:
+    event = await session.scalar(select(Event).join(Calendar).join(User).where(
+        Event.id == event_id, User.telegram_id == owner_telegram_id))
+    if not event:
+        raise PermissionError("Event not found or not owned by you")
+    return list((await session.scalars(select(EventConfirmation).where(
+        EventConfirmation.event_id == event_id).order_by(EventConfirmation.confirmed_at))).all())
+
+
+async def confirmed_event_ids(session: AsyncSession, user_id: int, event_ids: list[int]) -> set[int]:
+    if not event_ids:
+        return set()
+    rows = await session.scalars(select(EventConfirmation.event_id).where(
+        EventConfirmation.user_id == user_id, EventConfirmation.event_id.in_(event_ids)))
+    return set(rows.all())
+
+
+async def upcoming_for_user_with_status(session: AsyncSession, telegram_id: int, limit: int = 10) -> list[tuple[Event, Calendar, bool]]:
+    rows = await upcoming_for_user(session, telegram_id, limit)
+    if not rows:
+        return []
+    user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+    if not user:
+        return [(e, c, False) for e, c in rows]
+    confirmed = await confirmed_event_ids(session, user.id, [e.id for e, _ in rows])
+    return [(e, c, e.id in confirmed) for e, c in rows]
 
 
 async def set_reminders(session: AsyncSession, telegram_id: int, calendar_id: int, value: str) -> bool:

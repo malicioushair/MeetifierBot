@@ -7,6 +7,7 @@ from aiogram import Bot
 from sqlalchemy import select
 
 from .db import Calendar, Database, Event, NotificationJob, Subscription, User, utcnow
+from .keyboards import event_confirm_keyboard
 from .service import display_time
 
 
@@ -26,7 +27,8 @@ async def process_due_jobs(db: Database, bot: Bot) -> int:
                 job.state = "obsolete"; continue
             try:
                 minutes = job.kind.split(":", 1)[1]
-                await bot.send_message(user.telegram_id, f"Reminder ({minutes} min): {event.title}\n{display_time(event.start_utc, user.timezone)}\nCalendar: {calendar.name}")
+                await bot.send_message(user.telegram_id, f"Reminder ({minutes} min): {event.title}\n{display_time(event.start_utc, user.timezone)}\nCalendar: {calendar.name}",
+                                       reply_markup=event_confirm_keyboard(event.id))
                 job.state, job.sent_at = "sent", utcnow()
             except Exception as exc:
                 job.attempts += 1

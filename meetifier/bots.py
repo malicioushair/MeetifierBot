@@ -8,14 +8,14 @@ from sqlalchemy import select
 
 from .config import Settings
 from .db import Calendar, Database, Event, Subscription, User, utcnow
-from .keyboards import (ORGANIZER_BUTTONS, ORG_CALENDARS, ORG_CANCEL, ORG_EVENTS, ORG_HELP, ORG_INVITE,
-                        ORG_NEW_CALENDAR, ORG_NEW_EVENT, ORG_RESCHEDULE, PARTICIPANT_BUTTONS, PAR_HELP, PAR_MUTE,
-                        PAR_REMINDERS, PAR_SUBSCRIPTIONS, PAR_TIMEZONE, PAR_UNMUTE, PAR_UNSUBSCRIBE, PAR_UPCOMING,
-                        calendars_keyboard, confirm_cancel_keyboard, events_keyboard, organizer_main_menu,
-                        participant_main_menu)
-from .service import (change_event, create_calendar, create_events, display_time, invitation_calendar,
-                      make_invitation, set_reminders, set_subscription_state, set_timezone, subscribe,
-                      upcoming_for_user)
+from .keyboards import (ORGANIZER_BUTTONS, ORG_CALENDARS, ORG_CANCEL, ORG_CONFIRMATIONS, ORG_EVENTS, ORG_HELP,
+                        ORG_INVITE, ORG_NEW_CALENDAR, ORG_NEW_EVENT, ORG_RESCHEDULE, PARTICIPANT_BUTTONS, PAR_CONFIRM,
+                        PAR_HELP, PAR_MUTE, PAR_REMINDERS, PAR_SUBSCRIPTIONS, PAR_TIMEZONE, PAR_UNMUTE, PAR_UNSUBSCRIBE,
+                        PAR_UPCOMING, calendars_keyboard, confirm_cancel_keyboard, event_confirm_keyboard,
+                        events_keyboard, organizer_main_menu, participant_main_menu, upcoming_confirm_keyboard)
+from .service import (change_event, confirm_event, confirmations_for_event, create_calendar, create_events, display_time,
+                      invitation_calendar, make_invitation, set_reminders, set_subscription_state, set_timezone,
+                      subscribe, upcoming_for_user_with_status)
 from .states import (OrganizerNewCalendar, OrganizerNewEvent, OrganizerReschedule, ParticipantReminders,
                      ParticipantTimezone)
 
@@ -28,18 +28,27 @@ ORGANIZER_HELP = """Use the menu buttons below, or type commands directly:
 /invite CALENDAR_ID
 /reschedule EVENT_ID | 2026-09-02 19:00
 /cancel EVENT_ID
+/confirmations CALENDAR_ID
 
 Use WEEKS=1 for one-time events or 2..52 for weekly recurrence."""
 
 PARTICIPANT_HELP = """Use the menu buttons below, or type commands directly:
 
 /upcoming - next events
+/confirm EVENT_ID - confirm attendance
 /timezone Europe/Moscow
 /reminders CALENDAR_ID 1440,30
 /mute CALENDAR_ID
 /unmute CALENDAR_ID
 /unsubscribe CALENDAR_ID
 /subscriptions"""
+
+
+def participant_display_name(user) -> str:
+    name = (user.full_name or "").strip()
+    if user.username:
+        return f"{name} (@{user.username})".strip() if name else f"@{user.username}"
+    return name or f"User {user.id}"
 
 
 def split_args(command: CommandObject, count_min: int, count_max: int | None = None) -> list[str]:
@@ -387,6 +396,51 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         await callback.message.edit_text("Cancellation aborted.")
         await callback.answer()
 
+    @router.message(Command("confirmations"))
+    @router.message(F.text == ORG_CONFIRMATIONS)
+    async def confirmations_start(message: Message, state: FSMContext, command: CommandObject | None = None) -> None:
+        await state.clear()
+        if command and command.args:
+            try:
+                calendar_id = int(command.args.strip())
+                async with db.sessions() as session:
+                    rows = await fetch_future_events(session, calendar_id)
+                if not rows:
+                    await message.answer("No future events in this calendar.", reply_markup=organizer_main_menu())
+                    return
+                await message.answer("Choose an event:", reply_markup=events_keyboard(rows, "o_conf_evt"))
+            except ValueError as exc:
+                await message.answer(f"Error: {exc}", reply_markup=organizer_main_menu())
+            return
+        await pick_calendar(message, "o_conf_cal", "Choose a calendar to view confirmations:")
+
+    @router.callback_query(F.data.startswith("o_conf_cal:"))
+    async def confirmations_calendar(callback: CallbackQuery) -> None:
+        calendar_id = int(callback.data.split(":", 1)[1])
+        async with db.sessions() as session:
+            rows = await fetch_future_events(session, calendar_id)
+        if not rows:
+            await callback.message.edit_text("No future events in this calendar.")
+            await callback.answer()
+            return
+        await callback.message.edit_text("Choose an event:", reply_markup=events_keyboard(rows, "o_conf_evt"))
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("o_conf_evt:"))
+    async def confirmations_event(callback: CallbackQuery) -> None:
+        event_id = int(callback.data.split(":", 1)[1])
+        async with db.sessions() as session:
+            calendar = await session.scalar(select(Calendar).join(Event).where(Event.id == event_id))
+            event = await session.get(Event, event_id)
+            rows = await confirmations_for_event(session, callback.from_user.id, event_id)
+        if not rows:
+            text = f"No confirmations yet for {event.title}."
+        else:
+            names = "\n".join(f"• {c.display_name or 'Participant'}" for c in rows)
+            text = f"Confirmations for {event.title} ({display_time(event.start_utc, calendar.timezone)}):\n{names}"
+        await callback.message.edit_text(text)
+        await callback.answer()
+
     return router
 
 
@@ -398,12 +452,26 @@ async def notify_subscribers(session, bot: Bot, calendar: Calendar, events: list
             try:
                 await bot.send_message(
                     telegram_id,
-                    f"{heading}: {event.title}\n{display_time(event.start_utc, calendar.timezone)}\nCalendar: {calendar.name}")
+                    f"{heading}: {event.title}\n{display_time(event.start_utc, calendar.timezone)}\nCalendar: {calendar.name}",
+                    reply_markup=event_confirm_keyboard(event.id),
+                )
             except Exception:
                 pass
 
 
-def build_participant_router(db: Database, settings: Settings) -> Router:
+async def notify_organizer_confirmation(bot: Bot, organizer_telegram_id: int, participant_name: str,
+                                        event: Event, calendar: Calendar) -> None:
+    try:
+        await bot.send_message(
+            organizer_telegram_id,
+            f"✅ {participant_name} confirmed attendance:\n{event.title}\n"
+            f"{display_time(event.start_utc, calendar.timezone)}\nCalendar: {calendar.name}",
+        )
+    except Exception:
+        pass
+
+
+def build_participant_router(db: Database, settings: Settings, organizer_bot: Bot) -> Router:
     router = Router(name="participant")
 
     @router.message(CommandStart(deep_link=True))
@@ -455,10 +523,14 @@ def build_participant_router(db: Database, settings: Settings) -> Router:
     async def reply_upcoming(message: Message) -> None:
         async with db.sessions() as session:
             user = await session.scalar(select(User).where(User.telegram_id == message.from_user.id))
-            rows = await upcoming_for_user(session, message.from_user.id)
+            rows = await upcoming_for_user_with_status(session, message.from_user.id)
         tz = user.timezone if user else settings.default_timezone
+        lines = []
+        for event, calendar, confirmed in rows:
+            status = " ✅" if confirmed else ""
+            lines.append(f"{event.title} — {display_time(event.start_utc, tz)} ({calendar.name}){status}")
         await message.answer(
-            "\n".join(f"{e.title} — {display_time(e.start_utc, tz)} ({c.name})" for e, c in rows) or "No upcoming events.",
+            "\n".join(lines) or "No upcoming events.",
             reply_markup=participant_main_menu(),
         )
 
@@ -467,6 +539,49 @@ def build_participant_router(db: Database, settings: Settings) -> Router:
     async def upcoming(message: Message, state: FSMContext) -> None:
         await state.clear()
         await reply_upcoming(message)
+
+    @router.message(Command("confirm"))
+    @router.message(F.text == PAR_CONFIRM)
+    async def confirm_start(message: Message, state: FSMContext, command: CommandObject | None = None) -> None:
+        await state.clear()
+        if command and command.args:
+            await handle_confirm(message.from_user, int(command.args.strip()), message)
+            return
+        async with db.sessions() as session:
+            rows = await upcoming_for_user_with_status(session, message.from_user.id)
+        pending = [(e, c) for e, c, confirmed in rows if not confirmed]
+        if not pending:
+            await message.answer("No events waiting for confirmation.", reply_markup=participant_main_menu())
+            return
+        confirmed_ids = {e.id for e, _, confirmed in rows if confirmed}
+        await message.answer(
+            "Tap an event to confirm attendance:",
+            reply_markup=upcoming_confirm_keyboard([e for e, _ in pending], confirmed_ids),
+        )
+
+    async def handle_confirm(user, event_id: int, reply_target: Message | CallbackQuery) -> None:
+        name = participant_display_name(user)
+        try:
+            async with db.sessions() as session:
+                event, calendar, owner, created = await confirm_event(
+                    session, user.id, event_id, name, settings.default_timezone)
+            if created:
+                await notify_organizer_confirmation(organizer_bot, owner.telegram_id, name, event, calendar)
+                text = f"Confirmed: {event.title}\n{display_time(event.start_utc, calendar.timezone)}"
+            else:
+                text = f"Already confirmed: {event.title}"
+        except (ValueError, PermissionError) as exc:
+            text = f"Error: {exc}"
+        if isinstance(reply_target, CallbackQuery):
+            await reply_target.message.edit_text(text)
+            await reply_target.answer()
+        else:
+            await reply_target.answer(text, reply_markup=participant_main_menu())
+
+    @router.callback_query(F.data.startswith("p_confirm:"))
+    async def confirm_callback(callback: CallbackQuery, state: FSMContext) -> None:
+        await state.clear()
+        await handle_confirm(callback.from_user, int(callback.data.split(":", 1)[1]), callback)
 
     async def reply_subscriptions(message: Message) -> None:
         async with db.sessions() as session:
@@ -628,6 +743,7 @@ async def configure_commands(organizer: Bot, participant: Bot) -> None:
     ])
     await participant.set_my_commands([
         BotCommand(command="upcoming", description="Upcoming events"),
+        BotCommand(command="confirm", description="Confirm attendance"),
         BotCommand(command="subscriptions", description="My calendars"),
         BotCommand(command="help", description="Show help"),
     ])

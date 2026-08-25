@@ -68,6 +68,16 @@ class Subscription(Base):
     custom_reminder_minutes: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
 
+class EventConfirmation(Base):
+    __tablename__ = "event_confirmations"
+    __table_args__ = (UniqueConstraint("event_id", "user_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    display_name: Mapped[str] = mapped_column(String(200), default="")
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class NotificationJob(Base):
     __tablename__ = "notification_jobs"
     __table_args__ = (UniqueConstraint("event_id", "user_id", "kind", "event_version"),)

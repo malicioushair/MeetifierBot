@@ -20,7 +20,7 @@ async def main() -> None:
     organizer, participant = Bot(settings.organizer_bot_token), Bot(settings.participant_bot_token)
     organizer_dp, participant_dp = Dispatcher(storage=MemoryStorage()), Dispatcher(storage=MemoryStorage())
     organizer_dp.include_router(build_organizer_router(db, settings, participant))
-    participant_dp.include_router(build_participant_router(db, settings))
+    participant_dp.include_router(build_participant_router(db, settings, organizer))
     await configure_commands(organizer, participant)
     try:
         await asyncio.gather(
