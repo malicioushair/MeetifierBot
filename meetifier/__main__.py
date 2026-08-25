@@ -4,6 +4,7 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import MemoryStorage
 
 from .bots import build_organizer_router, build_participant_router, configure_commands
 from .config import Settings
@@ -17,7 +18,7 @@ async def main() -> None:
     db = Database(settings.database_url)
     await db.init()
     organizer, participant = Bot(settings.organizer_bot_token), Bot(settings.participant_bot_token)
-    organizer_dp, participant_dp = Dispatcher(), Dispatcher()
+    organizer_dp, participant_dp = Dispatcher(storage=MemoryStorage()), Dispatcher(storage=MemoryStorage())
     organizer_dp.include_router(build_organizer_router(db, settings, participant))
     participant_dp.include_router(build_participant_router(db, settings))
     await configure_commands(organizer, participant)
