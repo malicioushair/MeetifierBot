@@ -20,13 +20,13 @@ from meetifier.service import create_calendar, get_or_create_user
 
 
 def test_event_to_google_body():
-    calendar = Calendar(id=1, owner_user_id=1, name="Math", timezone="Europe/Moscow")
+    calendar = Calendar(id=1, owner_user_id=1, name="Math", timezone=3)
     start = datetime(2030, 1, 1, 15, 0)
     end = datetime(2030, 1, 1, 16, 0)
     event = Event(id=1, calendar_id=1, title="Algebra", start_utc=start, end_utc=end)
     body = event_to_google_body(event, calendar)
     assert body["summary"] == "Algebra"
-    assert body["start"]["timeZone"] == "Europe/Moscow"
+    assert body["start"]["timeZone"] == "Etc/GMT-3"
     assert "18:00" in body["start"]["dateTime"]
 
 
@@ -62,7 +62,7 @@ async def db(tmp_path):
 
 async def test_persist_refreshed_tokens_updates_account(db):
     async with db.sessions() as session:
-        user = await get_or_create_user(session, 1, "UTC")
+        user = await get_or_create_user(session, 1, 0)
         account = GoogleAccount(
             user_id=user.id,
             refresh_token="old_rt",
@@ -92,7 +92,7 @@ async def test_persist_refreshed_tokens_updates_account(db):
 
 async def test_google_event_import_update_cancel_and_attendees(db):
     async with db.sessions() as session:
-        calendar = await create_calendar(session, 1, "Work", "Europe/Moscow", "UTC")
+        calendar = await create_calendar(session, 1, "Work", 3, 0)
         link = GoogleCalendarLink(
             calendar_id=calendar.id,
             google_calendar_id="primary",
@@ -143,7 +143,7 @@ async def test_google_event_import_update_cancel_and_attendees(db):
 
 async def test_google_event_import_is_idempotent(db):
     async with db.sessions() as session:
-        calendar = await create_calendar(session, 1, "Work", "UTC", "UTC")
+        calendar = await create_calendar(session, 1, "Work", 0, 0)
         link = GoogleCalendarLink(calendar_id=calendar.id, google_calendar_id="primary", google_calendar_name="Work")
         session.add(link)
         await session.commit()

@@ -18,10 +18,23 @@ async def db(tmp_path):
     await database.close()
 
 
+def test_timezone_offset_parsing():
+    from meetifier.config import format_timezone_offset, parse_timezone_offset
+
+    assert parse_timezone_offset(3) == 3
+    assert parse_timezone_offset("+3") == 3
+    assert parse_timezone_offset("UTC-5") == -5
+    assert parse_timezone_offset("UTC") == 0
+    assert format_timezone_offset(3) == "UTC+3"
+    with pytest.raises(ValueError):
+        parse_timezone_offset(99)
+
+
 def test_timezone_conversion_and_display():
-    utc = local_to_utc("2026-01-15 12:00", "Europe/Moscow")
+    utc = local_to_utc("2026-01-15 12:00", 3)
     assert utc.hour == 9
-    assert "12:00" in display_time(utc, "Europe/Moscow")
+    assert "12:00" in display_time(utc, 3)
+    assert "UTC+3" in display_time(utc, 3)
 
 
 def test_parse_minutes():
@@ -31,9 +44,9 @@ def test_parse_minutes():
 
 async def prepared(db):
     async with db.sessions() as session:
-        calendar = await create_calendar(session, 100, "Math", "Europe/Moscow", "UTC")
+        calendar = await create_calendar(session, 100, "Math", 3, 0)
         invite = await make_invitation(session, 100, calendar.id)
-        await subscribe(session, 200, invite.token, "UTC")
+        await subscribe(session, 200, invite.token, 0)
         return calendar
 
 
@@ -76,8 +89,8 @@ async def test_confirm_event_notifies_organizer_data(db):
     async with db.sessions() as session:
         event = (await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60))[0]
         event_id = event.id
-        confirmed, _, owner, created = await confirm_event(session, 200, event_id, "Alice", "UTC")
-        again, _, _, created_again = await confirm_event(session, 200, event_id, "Alice", "UTC")
+        confirmed, _, owner, created = await confirm_event(session, 200, event_id, "Alice", 0)
+        again, _, _, created_again = await confirm_event(session, 200, event_id, "Alice", 0)
         rows = await confirmations_for_event(session, 100, event_id)
     assert created
     assert not created_again
@@ -91,14 +104,14 @@ async def test_confirmations_cleared_on_reschedule(db):
     calendar = await prepared(db)
     async with db.sessions() as session:
         event = (await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60))[0]
-        await confirm_event(session, 200, event.id, "Alice", "UTC")
+        await confirm_event(session, 200, event.id, "Alice", 0)
         await change_event(session, 100, event.id, "2030-01-02 19:00")
         rows = await confirmations_for_event(session, 100, event.id)
     assert rows == []
 
 
 def test_week_bounds_utc():
-    start, end = week_bounds_utc("UTC")
+    start, end = week_bounds_utc(0)
     assert end > start
     assert (end - start).days == 7
 

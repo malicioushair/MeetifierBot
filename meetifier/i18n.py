@@ -61,7 +61,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "5. Reschedule or cancel when plans change; check confirmations\n\n"
             "Menu features\n"
             "📅 Calendars — list your calendars\n"
-            "➕ New calendar — name + timezone (e.g. Europe/Belgrade)\n"
+            "➕ New calendar — name + UTC offset hours (e.g. 1 for UTC+1)\n"
             "➕ New event — title, start time, duration, weeks (1 = one-time, 2–52 = weekly)\n"
             "📋 Events — next event or this week\n"
             "🔗 Invite — share a Telegram link so people can subscribe\n"
@@ -76,7 +76,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "par.onboarding": (
             "Typical flow\n"
             "1. Open an invite link from an organizer (or tap Subscribe)\n"
-            "2. Set your timezone\n"
+            "2. Set your UTC offset in hours (e.g. 1 for UTC+1)\n"
             "3. Optionally set reminder times per calendar\n"
             "4. Check upcoming events and confirm attendance\n"
             "5. Mute or unsubscribe when you no longer need a calendar\n\n"
@@ -84,7 +84,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "📅 Upcoming — next event or this week\n"
             "✅ Confirm — mark that you will attend\n"
             "📋 Subscriptions — calendars you follow\n"
-            "🌍 Timezone — used for how times are shown to you\n"
+            "🌍 Timezone — UTC offset in hours used for how times are shown to you\n"
             "⏰ Reminders — minutes before the event (e.g. 1440,30 = 1 day and 30 min)\n"
             "🔇 Mute / 🔊 Unmute — pause or resume reminders for a calendar\n"
             "🚫 Unsubscribe — leave a calendar and stop jobs\n"
@@ -107,7 +107,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "no_calendars_create": "No calendars yet. Create one first.",
         "calendar_created": "Calendar created: {name} (ID {id})",
         "enter_calendar_name": "Enter calendar name:",
-        "enter_timezone": "Enter timezone (e.g. Europe/Moscow):",
+        "enter_timezone": "Enter UTC offset in hours (e.g. 3 for UTC+3, -5 for UTC-5):",
         "what_to_see": "What would you like to see?",
         "choose_calendar": "Choose a calendar:",
         "choose_calendar_invite": "Choose a calendar to invite to:",
@@ -202,7 +202,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "no_subscriptions": "No subscriptions.",
         "sub_muted": "muted",
         "sub_active": "active",
-        "timezone_updated": "Timezone updated.",
+        "timezone_updated": "Timezone updated (UTC offset).",
         "choose_mute": "Choose a calendar to mute:",
         "choose_unmute": "Choose a calendar to unmute:",
         "choose_unsubscribe": "Choose a calendar to unsubscribe from:",
@@ -218,7 +218,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "usage_reminders": "Usage: /reminders CALENDAR_ID 1440,30",
         "org.help": (
             "Use the menu buttons below, or type commands directly:\n\n"
-            "/newcalendar Name | Europe/Moscow\n"
+            "/newcalendar Name | 3\n"
             "/calendars\n"
             "/newevent CALENDAR_ID | Title | 2026-09-01 18:30 | DURATION_MINUTES | WEEKS\n"
             "/events CALENDAR_ID [next|week]\n"
@@ -235,7 +235,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "Use the menu buttons below, or type commands directly:\n\n"
             "/upcoming [next|week] - upcoming events\n"
             "/confirm EVENT_ID - confirm attendance\n"
-            "/timezone Europe/Moscow\n"
+            "/timezone 3\n"
             "/reminders CALENDAR_ID 1440,30\n"
             "/mute CALENDAR_ID\n"
             "/unmute CALENDAR_ID\n"
@@ -266,7 +266,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "5. Переносите или отменяйте события; смотрите подтверждения\n\n"
             "Кнопки меню\n"
             "📅 Календари — список ваших календарей\n"
-            "➕ Новый календарь — название и часовой пояс (например Europe/Moscow)\n"
+            "➕ Новый календарь — название и смещение UTC в часах (например 3 для UTC+3)\n"
             "➕ Новое событие — название, время начала, длительность, недели (1 — разово, 2–52 — еженедельно)\n"
             "📋 События — следующее или на этой неделе\n"
             "🔗 Пригласить — ссылка в Telegram для подписки\n"
@@ -281,7 +281,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "par.onboarding": (
             "Обычный сценарий\n"
             "1. Откройте ссылку от организатора (или нажмите Подписаться)\n"
-            "2. Укажите часовой пояс\n"
+            "2. Укажите смещение UTC в часах (например 3 для UTC+3)\n"
             "3. При желании настройте напоминания для календаря\n"
             "4. Смотрите ближайшие события и подтверждайте участие\n"
             "5. Отключайте звук или отписывайтесь, когда календарь больше не нужен\n\n"
@@ -289,7 +289,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "📅 Ближайшие — следующее событие или эта неделя\n"
             "✅ Подтвердить — отметить, что вы придёте\n"
             "📋 Подписки — календари, на которые вы подписаны\n"
-            "🌍 Часовой пояс — как вам показываются времена\n"
+            "🌍 Часовой пояс — смещение UTC в часах для отображения времени\n"
             "⏰ Напоминания — минуты до события (например 1440,30 = день и 30 мин)\n"
             "🔇 Без звука / 🔊 Включить звук — пауза или возобновление напоминаний\n"
             "🚫 Отписаться — уйти с календаря и остановить задачи\n"
@@ -312,7 +312,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "no_calendars_create": "Календарей пока нет. Сначала создайте календарь.",
         "calendar_created": "Календарь создан: {name} (ID {id})",
         "enter_calendar_name": "Введите название календаря:",
-        "enter_timezone": "Введите часовой пояс (например Europe/Moscow):",
+        "enter_timezone": "Введите смещение UTC в часах (например 3 для UTC+3, -5 для UTC-5):",
         "what_to_see": "Что показать?",
         "choose_calendar": "Выберите календарь:",
         "choose_calendar_invite": "Выберите календарь для приглашения:",
@@ -407,7 +407,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "no_subscriptions": "Нет подписок.",
         "sub_muted": "без звука",
         "sub_active": "активна",
-        "timezone_updated": "Часовой пояс обновлён.",
+        "timezone_updated": "Часовой пояс обновлён (смещение UTC).",
         "choose_mute": "Выберите календарь для отключения уведомлений:",
         "choose_unmute": "Выберите календарь для включения уведомлений:",
         "choose_unsubscribe": "Выберите календарь для отписки:",
@@ -423,7 +423,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "usage_reminders": "Использование: /reminders CALENDAR_ID 1440,30",
         "org.help": (
             "Используйте кнопки меню ниже или команды:\n\n"
-            "/newcalendar Название | Europe/Moscow\n"
+            "/newcalendar Название | 3\n"
             "/calendars\n"
             "/newevent CALENDAR_ID | Название | 2026-09-01 18:30 | МИНУТЫ | НЕДЕЛИ\n"
             "/events CALENDAR_ID [next|week]\n"
@@ -440,7 +440,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "Используйте кнопки меню ниже или команды:\n\n"
             "/upcoming [next|week] — ближайшие события\n"
             "/confirm EVENT_ID — подтвердить участие\n"
-            "/timezone Europe/Moscow\n"
+            "/timezone 3\n"
             "/reminders CALENDAR_ID 1440,30\n"
             "/mute CALENDAR_ID\n"
             "/unmute CALENDAR_ID\n"
@@ -471,7 +471,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "5. Pomerite ili otkažite događaje; proverite potvrde\n\n"
             "Funkcije menija\n"
             "📅 Kalendari — lista vaših kalendara\n"
-            "➕ Novi kalendar — naziv i vremenska zona (npr. Europe/Belgrade)\n"
+            "➕ Novi kalendar — naziv i UTC pomeraj u satima (npr. 1 za UTC+1)\n"
             "➕ Novi događaj — naslov, vreme početka, trajanje, nedelje (1 jednokratno, 2–52 nedeljno)\n"
             "📋 Događaji — sledeći ili ova nedelja\n"
             "🔗 Pozovi — Telegram link za pretplatu\n"
@@ -486,7 +486,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "par.onboarding": (
             "Uobičajeni tok\n"
             "1. Otvorite link od organizatora (ili dodirnite Pretplati se)\n"
-            "2. Podesite vremensku zonu\n"
+            "2. Podesite UTC pomeraj u satima (npr. 1 za UTC+1)\n"
             "3. Po želji podesite podsetnike po kalendaru\n"
             "4. Pregledajte predstojeće događaje i potvrdite prisustvo\n"
             "5. Isključite obaveštenja ili otkažite pretplatu kad kalendar više nije potreban\n\n"
@@ -494,7 +494,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "📅 Predstojeći — sledeći događaj ili ova nedelja\n"
             "✅ Potvrdi — označite da ćete doći\n"
             "📋 Pretplate — kalendari koje pratite\n"
-            "🌍 Vremenska zona — kako se vama prikazuju vremena\n"
+            "🌍 Vremenska zona — UTC pomeraj u satima za prikaz vremena\n"
             "⏰ Podsetnici — minuti pre događaja (npr. 1440,30 = 1 dan i 30 min)\n"
             "🔇 Isključi / 🔊 Uključi — pauza ili nastavak podsetnika\n"
             "🚫 Otkaži pretplatu — napustite kalendar i zaustavite poslove\n"
@@ -517,7 +517,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "no_calendars_create": "Još nema kalendara. Prvo napravite jedan.",
         "calendar_created": "Kalendar kreiran: {name} (ID {id})",
         "enter_calendar_name": "Unesite naziv kalendara:",
-        "enter_timezone": "Unesite vremensku zonu (npr. Europe/Belgrade):",
+        "enter_timezone": "Unesite UTC pomeraj u satima (npr. 1 za UTC+1, -5 za UTC-5):",
         "what_to_see": "Šta želite da vidite?",
         "choose_calendar": "Izaberite kalendar:",
         "choose_calendar_invite": "Izaberite kalendar za pozivnicu:",
@@ -612,7 +612,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "no_subscriptions": "Nema pretplata.",
         "sub_muted": "isključeno",
         "sub_active": "aktivno",
-        "timezone_updated": "Vremenska zona ažurirana.",
+        "timezone_updated": "Vremenska zona ažurirana (UTC pomeraj).",
         "choose_mute": "Izaberite kalendar za isključivanje obaveštenja:",
         "choose_unmute": "Izaberite kalendar za uključivanje obaveštenja:",
         "choose_unsubscribe": "Izaberite kalendar za otkazivanje pretplate:",
@@ -628,7 +628,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "usage_reminders": "Upotreba: /reminders CALENDAR_ID 1440,30",
         "org.help": (
             "Koristite dugmad menija ispod ili komande:\n\n"
-            "/newcalendar Naziv | Europe/Belgrade\n"
+            "/newcalendar Naziv | 1\n"
             "/calendars\n"
             "/newevent CALENDAR_ID | Naslov | 2026-09-01 18:30 | MINUTI | NEDELJE\n"
             "/events CALENDAR_ID [next|week]\n"
@@ -645,7 +645,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "Koristite dugmad menija ispod ili komande:\n\n"
             "/upcoming [next|week] - predstojeći događaji\n"
             "/confirm EVENT_ID - potvrdi prisustvo\n"
-            "/timezone Europe/Belgrade\n"
+            "/timezone 1\n"
             "/reminders CALENDAR_ID 1440,30\n"
             "/mute CALENDAR_ID\n"
             "/unmute CALENDAR_ID\n"

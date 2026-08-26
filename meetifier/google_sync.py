@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from collections.abc import Callable
 from datetime import date, datetime, time, timedelta, timezone
 from typing import TypeVar
-from zoneinfo import ZoneInfo
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -14,7 +13,7 @@ from googleapiclient.discovery import build
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .config import Settings
+from .config import Settings, google_timezone_id, parse_timezone_offset, tzinfo_from_offset
 from .db import (Calendar, Database, Event, EventConfirmation, GoogleAccount, GoogleCalendarLink,
                  GoogleCalendarSync, GoogleEventAttendee, GoogleEventLink, GoogleEventState,
                  Invitation, NotificationJob, OAuthState, User, utcnow)
@@ -73,13 +72,14 @@ def authorization_url(settings: Settings, state: str) -> str:
 
 
 def event_to_google_body(event: Event, calendar: Calendar) -> dict:
-    tz = ZoneInfo(calendar.timezone)
+    tz = tzinfo_from_offset(calendar.timezone)
+    zone_id = google_timezone_id(calendar.timezone)
     start = event.start_utc.replace(tzinfo=timezone.utc).astimezone(tz)
     end = event.end_utc.replace(tzinfo=timezone.utc).astimezone(tz)
     return {
         "summary": event.title,
-        "start": {"dateTime": start.isoformat(), "timeZone": calendar.timezone},
-        "end": {"dateTime": end.isoformat(), "timeZone": calendar.timezone},
+        "start": {"dateTime": start.isoformat(), "timeZone": zone_id},
+        "end": {"dateTime": end.isoformat(), "timeZone": zone_id},
     }
 
 
@@ -329,11 +329,12 @@ async def list_google_calendars(session: AsyncSession, settings: Settings, accou
     return calendars
 
 
-def _google_datetime(value: dict, timezone_name: str) -> datetime:
+def _google_datetime(value: dict, tz_offset_hours: int | str) -> datetime:
     if value.get("dateTime"):
         parsed = datetime.fromisoformat(value["dateTime"].replace("Z", "+00:00"))
     else:
-        parsed = datetime.combine(date.fromisoformat(value["date"]), time.min, ZoneInfo(timezone_name))
+        parsed = datetime.combine(
+            date.fromisoformat(value["date"]), time.min, tzinfo_from_offset(tz_offset_hours))
     return parsed.astimezone(timezone.utc).replace(tzinfo=None)
 
 
@@ -352,9 +353,10 @@ async def import_google_calendar(db: Database, settings: Settings, telegram_id: 
         if existing:
             calendar = existing
         else:
-            timezone_name = google_calendar.get("timezone") or settings.default_timezone
+            timezone_offset = parse_timezone_offset(
+                google_calendar.get("timezone") or settings.default_timezone)
             calendar = await create_calendar(
-                session, telegram_id, google_calendar["name"], timezone_name, settings.default_timezone)
+                session, telegram_id, google_calendar["name"], timezone_offset, settings.default_timezone)
             await link_google_calendar(
                 session, telegram_id, calendar.id, google_calendar["id"], google_calendar["name"])
         calendar_id = calendar.id

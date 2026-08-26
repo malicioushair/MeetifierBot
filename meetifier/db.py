@@ -3,11 +3,30 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import AsyncIterator
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, inspect, text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, TypeDecorator, UniqueConstraint, inspect, text
 from sqlalchemy.ext.asyncio import AsyncAttrs, AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from .i18n import DEFAULT_LOCALE
+
+
+class UtcOffsetHours(TypeDecorator):
+    """Store UTC hour offsets; coerce SQLite TEXT-affinity values back to int."""
+
+    impl = Integer
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        from .config import parse_timezone_offset
+        return parse_timezone_offset(value)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        from .config import parse_timezone_offset
+        return parse_timezone_offset(value)
 
 
 def utcnow() -> datetime:
@@ -23,7 +42,7 @@ class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
-    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    timezone: Mapped[int] = mapped_column(UtcOffsetHours, default=0)
     locale: Mapped[str] = mapped_column(String(8), default=DEFAULT_LOCALE)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
@@ -33,7 +52,7 @@ class Calendar(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     owner_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     name: Mapped[str] = mapped_column(String(200))
-    timezone: Mapped[str] = mapped_column(String(64))
+    timezone: Mapped[int] = mapped_column(UtcOffsetHours, default=0)
     reminder_minutes: Mapped[str] = mapped_column(String(100), default="1440,30")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
@@ -164,6 +183,7 @@ class Database:
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
             await connection.run_sync(_ensure_user_locale_column)
+            await connection.run_sync(_migrate_timezone_columns_to_int)
 
     async def session(self) -> AsyncIterator[AsyncSession]:
         async with self.sessions() as session:
@@ -177,3 +197,33 @@ def _ensure_user_locale_column(sync_conn) -> None:
     columns = {column["name"] for column in inspect(sync_conn).get_columns("users")}
     if "locale" not in columns:
         sync_conn.execute(text(f"ALTER TABLE users ADD COLUMN locale VARCHAR(8) DEFAULT '{DEFAULT_LOCALE}'"))
+
+
+def _migrate_timezone_columns_to_int(sync_conn) -> None:
+    from .config import parse_timezone_offset
+
+    for table in ("users", "calendars"):
+        rows = sync_conn.execute(text(f"SELECT id, timezone FROM {table}")).mappings().all()
+        for row in rows:
+            raw = row["timezone"]
+            try:
+                hours = parse_timezone_offset(raw if isinstance(raw, int) else str(raw))
+            except ValueError:
+                hours = 0
+            sync_conn.execute(
+                text(f"UPDATE {table} SET timezone = :hours WHERE id = :id"),
+                {"hours": hours, "id": row["id"]},
+            )
+        if sync_conn.dialect.name == "sqlite":
+            # Force numeric affinity so SQLAlchemy reads integers, not digit-strings.
+            sync_conn.execute(text(f"UPDATE {table} SET timezone = CAST(timezone AS INTEGER)"))
+    if sync_conn.dialect.name == "postgresql":
+        for table in ("users", "calendars"):
+            col_type = sync_conn.execute(text(
+                "SELECT data_type FROM information_schema.columns "
+                "WHERE table_name = :table AND column_name = 'timezone'"
+            ), {"table": table}).scalar()
+            if col_type and col_type != "integer":
+                sync_conn.execute(text(
+                    f"ALTER TABLE {table} ALTER COLUMN timezone TYPE INTEGER USING timezone::integer"
+                ))

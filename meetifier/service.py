@@ -3,12 +3,11 @@ from __future__ import annotations
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .config import validate_timezone
+from .config import format_timezone_offset, parse_timezone_offset, tzinfo_from_offset, validate_timezone
 from .db import Calendar, Event, EventConfirmation, Invitation, NotificationJob, Subscription, User, utcnow
 from .i18n import DEFAULT_LOCALE, normalize_locale
 
@@ -23,21 +22,22 @@ def parse_minutes(value: str) -> list[int]:
     return result
 
 
-def local_to_utc(value: str, timezone_name: str) -> datetime:
+def local_to_utc(value: str, tz_offset_hours: int | str) -> datetime:
     try:
-        local = datetime.strptime(value, "%Y-%m-%d %H:%M").replace(tzinfo=ZoneInfo(timezone_name))
+        local = datetime.strptime(value, "%Y-%m-%d %H:%M").replace(tzinfo=tzinfo_from_offset(tz_offset_hours))
     except ValueError as exc:
         raise ValueError("Date must use YYYY-MM-DD HH:MM") from exc
     return local.astimezone(timezone.utc).replace(tzinfo=None)
 
 
-def display_time(value: datetime, timezone_name: str) -> str:
-    aware = value.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(timezone_name))
-    return aware.strftime("%Y-%m-%d %H:%M") + f" ({timezone_name})"
+def display_time(value: datetime, tz_offset_hours: int | str) -> str:
+    hours = parse_timezone_offset(tz_offset_hours)
+    aware = value.replace(tzinfo=timezone.utc).astimezone(tzinfo_from_offset(hours))
+    return aware.strftime("%Y-%m-%d %H:%M") + f" ({format_timezone_offset(hours)})"
 
 
-def week_bounds_utc(timezone_name: str) -> tuple[datetime, datetime]:
-    tz = ZoneInfo(timezone_name)
+def week_bounds_utc(tz_offset_hours: int | str) -> tuple[datetime, datetime]:
+    tz = tzinfo_from_offset(tz_offset_hours)
     now_local = datetime.now(tz)
     week_start = (now_local - timedelta(days=now_local.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     week_end = week_start + timedelta(days=7)
@@ -47,7 +47,8 @@ def week_bounds_utc(timezone_name: str) -> tuple[datetime, datetime]:
     )
 
 
-async def calendar_events(session: AsyncSession, calendar_id: int, range_mode: str, timezone_name: str) -> list[Event]:
+async def calendar_events(session: AsyncSession, calendar_id: int, range_mode: str,
+                          tz_offset_hours: int | str) -> list[Event]:
     if range_mode not in {"next", "week"}:
         raise ValueError("Range must be 'next' or 'week'")
     now = utcnow()
@@ -55,18 +56,18 @@ async def calendar_events(session: AsyncSession, calendar_id: int, range_mode: s
     if range_mode == "next":
         query = query.where(Event.start_utc > now).order_by(Event.start_utc).limit(1)
     else:
-        start, end = week_bounds_utc(timezone_name)
+        start, end = week_bounds_utc(tz_offset_hours)
         query = query.where(Event.start_utc >= start, Event.start_utc < end).order_by(Event.start_utc)
     return list((await session.scalars(query)).all())
 
 
-async def get_or_create_user(session: AsyncSession, telegram_id: int, default_timezone: str,
+async def get_or_create_user(session: AsyncSession, telegram_id: int, default_timezone: int | str,
                              locale: str | None = None) -> User:
     user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
     if not user:
         user = User(
             telegram_id=telegram_id,
-            timezone=default_timezone,
+            timezone=parse_timezone_offset(default_timezone),
             locale=normalize_locale(locale) if locale else DEFAULT_LOCALE,
         )
         session.add(user)
@@ -74,7 +75,7 @@ async def get_or_create_user(session: AsyncSession, telegram_id: int, default_ti
     return user
 
 
-async def get_user_locale(session: AsyncSession, telegram_id: int, default_timezone: str = "UTC") -> str:
+async def get_user_locale(session: AsyncSession, telegram_id: int, default_timezone: int | str = 0) -> str:
     user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
     if not user:
         user = await get_or_create_user(session, telegram_id, default_timezone)
@@ -82,17 +83,18 @@ async def get_user_locale(session: AsyncSession, telegram_id: int, default_timez
     return normalize_locale(user.locale)
 
 
-async def set_locale(session: AsyncSession, telegram_id: int, locale: str, default_tz: str) -> User:
+async def set_locale(session: AsyncSession, telegram_id: int, locale: str, default_tz: int | str) -> User:
     user = await get_or_create_user(session, telegram_id, default_tz)
     user.locale = normalize_locale(locale)
     await session.commit()
     return user
 
 
-async def create_calendar(session: AsyncSession, telegram_id: int, name: str, timezone_name: str, default_tz: str) -> Calendar:
-    validate_timezone(timezone_name)
+async def create_calendar(session: AsyncSession, telegram_id: int, name: str, tz_offset_hours: int | str,
+                          default_tz: int | str) -> Calendar:
+    hours = validate_timezone(tz_offset_hours)
     user = await get_or_create_user(session, telegram_id, default_tz)
-    calendar = Calendar(owner_user_id=user.id, name=name.strip(), timezone=timezone_name)
+    calendar = Calendar(owner_user_id=user.id, name=name.strip(), timezone=hours)
     session.add(calendar)
     await session.commit()
     return calendar
@@ -154,7 +156,7 @@ async def invitation_calendar(session: AsyncSession, token: str) -> Calendar | N
         (Invitation.expires_at.is_(None)) | (Invitation.expires_at > utcnow())))
 
 
-async def subscribe(session: AsyncSession, telegram_id: int, token: str, default_tz: str) -> Calendar:
+async def subscribe(session: AsyncSession, telegram_id: int, token: str, default_tz: int | str) -> Calendar:
     calendar = await invitation_calendar(session, token)
     if not calendar:
         raise ValueError("Invitation is invalid or expired")
@@ -211,7 +213,7 @@ async def change_event(session: AsyncSession, owner_id: int, event_id: int, new_
 
 
 async def upcoming_for_user(session: AsyncSession, telegram_id: int, range_mode: str = "week",
-                            default_tz: str = "UTC", limit: int = 50) -> list[tuple[Event, Calendar]]:
+                            default_tz: int | str = 0, limit: int = 50) -> list[tuple[Event, Calendar]]:
     if range_mode not in {"next", "week", "future"}:
         raise ValueError("Range must be 'next', 'week', or 'future'")
     user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
@@ -232,10 +234,11 @@ async def upcoming_for_user(session: AsyncSession, telegram_id: int, range_mode:
     return list(rows.tuples())
 
 
-async def set_timezone(session: AsyncSession, telegram_id: int, timezone_name: str, default_tz: str) -> User:
-    validate_timezone(timezone_name)
+async def set_timezone(session: AsyncSession, telegram_id: int, tz_offset_hours: int | str,
+                       default_tz: int | str) -> User:
+    hours = validate_timezone(tz_offset_hours)
     user = await get_or_create_user(session, telegram_id, default_tz)
-    user.timezone = timezone_name
+    user.timezone = hours
     await session.commit()
     return user
 
@@ -259,7 +262,7 @@ async def set_subscription_state(session: AsyncSession, telegram_id: int, calend
 
 
 async def confirm_event(session: AsyncSession, telegram_id: int, event_id: int, display_name: str,
-                        default_tz: str) -> tuple[Event, Calendar, User, bool]:
+                        default_tz: int | str) -> tuple[Event, Calendar, User, bool]:
     user = await get_or_create_user(session, telegram_id, default_tz)
     event = await session.scalar(select(Event).where(Event.id == event_id, Event.status == "active", Event.start_utc > utcnow()))
     if not event:
@@ -296,7 +299,7 @@ async def confirmed_event_ids(session: AsyncSession, user_id: int, event_ids: li
 
 
 async def upcoming_for_user_with_status(session: AsyncSession, telegram_id: int, range_mode: str = "week",
-                                        default_tz: str = "UTC") -> list[tuple[Event, Calendar, bool]]:
+                                        default_tz: int | str = 0) -> list[tuple[Event, Calendar, bool]]:
     rows = await upcoming_for_user(session, telegram_id, range_mode, default_tz)
     if not rows:
         return []

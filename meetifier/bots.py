@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import select
 
-from .config import Settings
+from .config import Settings, format_timezone_offset
 from .db import Calendar, Database, Event, GoogleCalendarLink, Subscription, User, utcnow
 from .i18n import LOCALES, normalize_locale, t
 from .keyboards import (FLOW_BACK_DATA, FLOW_CANCEL_DATA, ORG_INPUT_BLOCKLIST, PAR_INPUT_BLOCKLIST,
@@ -378,7 +378,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         async with db.sessions() as session:
             rows = await fetch_owned_calendars(session, message.from_user.id)
         await message.answer(
-            "\n".join(f"{x.id}: {x.name} [{x.timezone}]" for x in rows) or t(locale, "no_calendars"),
+            "\n".join(f"{x.id}: {x.name} [{format_timezone_offset(x.timezone)}]" for x in rows) or t(locale, "no_calendars"),
             reply_markup=organizer_main_menu(locale),
         )
 
@@ -1166,7 +1166,7 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
             text=t(locale, "btn_subscribe", name=calendar.name), callback_data=f"subscribe:{token}")]])
         await message.answer(
-            t(locale, "invited_to", name=calendar.name, timezone=calendar.timezone),
+            t(locale, "invited_to", name=calendar.name, timezone=format_timezone_offset(calendar.timezone)),
             reply_markup=keyboard,
         )
 

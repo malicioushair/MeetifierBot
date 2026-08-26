@@ -11,7 +11,7 @@ def test_flow_nav_keyboard_and_inline_row():
         NAV_BTN["back"]["en"], NAV_BTN["cancel"]["en"],
     }
     from meetifier.db import Calendar
-    calendars = [Calendar(id=1, owner_user_id=1, name="Math", timezone="UTC")]
+    calendars = [Calendar(id=1, owner_user_id=1, name="Math", timezone=0)]
     inline = calendars_keyboard(calendars, "o_invite", "ru", show_back=True)
     flat = [btn for row in inline.inline_keyboard for btn in row]
     assert any(btn.callback_data == "flow:back" for btn in flat)
@@ -80,13 +80,13 @@ async def test_set_locale_persists(tmp_path):
     db = Database(f"sqlite+aiosqlite:///{tmp_path}/locale.db")
     await db.init()
     async with db.sessions() as session:
-        user = await get_or_create_user(session, 42, "UTC")
+        user = await get_or_create_user(session, 42, 0)
         await session.commit()
         assert user.locale == "en"
     async with db.sessions() as session:
-        user = await set_locale(session, 42, "ru", "UTC")
+        user = await set_locale(session, 42, "ru", 0)
         assert user.locale == "ru"
     async with db.sessions() as session:
-        user = await get_or_create_user(session, 42, "UTC")
+        user = await get_or_create_user(session, 42, 0)
         assert user.locale == "ru"
     await db.close()
