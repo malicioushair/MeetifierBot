@@ -12,11 +12,12 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from .config import Settings, google_timezone_id, parse_timezone_offset, tzinfo_from_offset
-from .db import (Calendar, Database, Event, EventConfirmation, GoogleAccount, GoogleCalendarLink,
-                 GoogleCalendarSync, GoogleEventAttendee, GoogleEventLink, GoogleEventState,
-                 Invitation, NotificationJob, OAuthState, User, utcnow)
+from .db import (Calendar, Database, Event, EventConfirmation, EventOccurrence, GoogleAccount,
+                 GoogleCalendarLink, GoogleCalendarSync, GoogleEventAttendee, GoogleEventLink,
+                 GoogleEventState, Invitation, NotificationJob, OAuthState, User, utcnow)
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ T = TypeVar("T")
 
 @dataclass(frozen=True)
 class GoogleSyncChange:
-    event_id: int
+    occurrence_id: int
     action: str
 
 
@@ -71,13 +72,14 @@ def authorization_url(settings: Settings, state: str) -> str:
     return url
 
 
-def event_to_google_body(event: Event, calendar: Calendar) -> dict:
+def event_to_google_body(occurrence: EventOccurrence, calendar: Calendar) -> dict:
     tz = tzinfo_from_offset(calendar.timezone)
     zone_id = google_timezone_id(calendar.timezone)
-    start = event.start_utc.replace(tzinfo=timezone.utc).astimezone(tz)
-    end = event.end_utc.replace(tzinfo=timezone.utc).astimezone(tz)
+    start = occurrence.start_utc.replace(tzinfo=timezone.utc).astimezone(tz)
+    end = occurrence.end_utc.replace(tzinfo=timezone.utc).astimezone(tz)
+    title = occurrence.event.title if occurrence.event is not None else ""
     return {
-        "summary": event.title,
+        "summary": title,
         "start": {"dateTime": start.isoformat(), "timeZone": zone_id},
         "end": {"dateTime": end.isoformat(), "timeZone": zone_id},
     }
@@ -364,8 +366,8 @@ async def import_google_calendar(db: Database, settings: Settings, telegram_id: 
     return calendar, result
 
 
-async def _replace_attendees(session: AsyncSession, event_id: int, attendees: list[dict]) -> None:
-    await session.execute(delete(GoogleEventAttendee).where(GoogleEventAttendee.event_id == event_id))
+async def _replace_attendees(session: AsyncSession, occurrence_id: int, attendees: list[dict]) -> None:
+    await session.execute(delete(GoogleEventAttendee).where(GoogleEventAttendee.occurrence_id == occurrence_id))
     seen: set[str] = set()
     for attendee in attendees:
         email = (attendee.get("email") or "").strip().lower()
@@ -373,16 +375,17 @@ async def _replace_attendees(session: AsyncSession, event_id: int, attendees: li
             continue
         seen.add(email)
         session.add(GoogleEventAttendee(
-            event_id=event_id,
+            occurrence_id=occurrence_id,
             email=email,
             display_name=(attendee.get("displayName") or "")[:200],
             response_status=(attendee.get("responseStatus") or "needsAction")[:30],
         ))
 
 
+
 async def _upsert_google_event(session: AsyncSession, calendar: Calendar, link: GoogleCalendarLink,
                                item: dict) -> GoogleSyncChange | None:
-    from .service import create_jobs_for_event
+    from .service import create_jobs_for_occurrence
 
     if item.get("eventType", "default") != "default":
         return None
@@ -396,19 +399,26 @@ async def _upsert_google_event(session: AsyncSession, calendar: Calendar, link: 
         GoogleEventLink.google_calendar_id == link.google_calendar_id,
         GoogleEventLink.google_event_id == google_event_id,
     ))
-    event = await session.get(Event, mapping.event_id) if mapping else None
+    occurrence = None
+    if mapping:
+        occurrence = await session.scalar(
+            select(EventOccurrence)
+            .options(selectinload(EventOccurrence.event))
+            .where(EventOccurrence.id == mapping.occurrence_id)
+        )
     status = item.get("status", "confirmed")
     if status == "cancelled":
-        if not event or event.status == "cancelled":
+        if not occurrence or occurrence.status == "cancelled":
             return None
         await session.execute(update(NotificationJob).where(
-            NotificationJob.event_id == event.id,
+            NotificationJob.occurrence_id == occurrence.id,
             NotificationJob.state == "pending",
         ).values(state="obsolete"))
-        await session.execute(delete(EventConfirmation).where(EventConfirmation.event_id == event.id))
-        event.status = "cancelled"
-        event.version += 1
-        return GoogleSyncChange(event.id, "cancelled")
+        await session.execute(delete(EventConfirmation).where(
+            EventConfirmation.occurrence_id == occurrence.id))
+        occurrence.status = "cancelled"
+        occurrence.version += 1
+        return GoogleSyncChange(occurrence.id, "cancelled")
 
     if not item.get("start") or not item.get("end"):
         return None
@@ -416,59 +426,76 @@ async def _upsert_google_event(session: AsyncSession, calendar: Calendar, link: 
     end_utc = _google_datetime(item["end"], calendar.timezone)
     title = (item.get("summary") or "(Untitled)")[:200]
     description = item.get("description") or ""
-    created = event is None
+    recurring_id = item.get("recurringEventId")
+    created = occurrence is None
     if created:
-        event = Event(
-            calendar_id=calendar.id,
-            title=title,
-            description=description,
-            start_utc=start_utc,
-            end_utc=end_utc,
-        )
-        session.add(event)
+        series = None
+        if recurring_id:
+            series = await session.scalar(
+                select(Event)
+                .join(EventOccurrence)
+                .join(GoogleEventState, GoogleEventState.occurrence_id == EventOccurrence.id)
+                .where(
+                    Event.calendar_id == calendar.id,
+                    GoogleEventState.recurring_event_id == recurring_id,
+                )
+                .limit(1)
+            )
+        if series is None:
+            series = Event(calendar_id=calendar.id, title=title, description=description, status="active")
+            session.add(series)
+            await session.flush()
+        else:
+            series.title = title
+            series.description = description
+        occurrence = EventOccurrence(
+            event_id=series.id, start_utc=start_utc, end_utc=end_utc, status="active")
+        session.add(occurrence)
         await session.flush()
         mapping = GoogleEventLink(
-            event_id=event.id,
+            occurrence_id=occurrence.id,
             google_event_id=google_event_id,
             google_calendar_id=link.google_calendar_id,
         )
         session.add(mapping)
-        state = GoogleEventState(event_id=event.id, source="google")
+        state = GoogleEventState(occurrence_id=occurrence.id, source="google")
         session.add(state)
-        await create_jobs_for_event(session, event, calendar)
+        await create_jobs_for_occurrence(session, occurrence, calendar)
         action = "created"
     else:
-        state = await session.get(GoogleEventState, event.id)
+        state = await session.get(GoogleEventState, occurrence.id)
         if not state:
-            state = GoogleEventState(event_id=event.id, source="meetifier")
+            state = GoogleEventState(occurrence_id=occurrence.id, source="meetifier")
             session.add(state)
+        event = occurrence.event
         changed = (
-            event.title != title or event.start_utc != start_utc or
-            event.end_utc != end_utc or event.status != "active"
+            event.title != title or occurrence.start_utc != start_utc or
+            occurrence.end_utc != end_utc or occurrence.status != "active"
         )
         event.description = description
         if changed:
             await session.execute(update(NotificationJob).where(
-                NotificationJob.event_id == event.id,
+                NotificationJob.occurrence_id == occurrence.id,
                 NotificationJob.state == "pending",
             ).values(state="obsolete"))
-            await session.execute(delete(EventConfirmation).where(EventConfirmation.event_id == event.id))
+            await session.execute(delete(EventConfirmation).where(
+                EventConfirmation.occurrence_id == occurrence.id))
             event.title = title
-            event.start_utc = start_utc
-            event.end_utc = end_utc
-            event.status = "active"
-            event.version += 1
-            await create_jobs_for_event(session, event, calendar)
+            occurrence.start_utc = start_utc
+            occurrence.end_utc = end_utc
+            occurrence.status = "active"
+            occurrence.version += 1
+            await create_jobs_for_occurrence(session, occurrence, calendar)
             action = "updated"
         else:
             action = "unchanged"
     state.etag = (item.get("etag") or "")[:256]
-    state.recurring_event_id = item.get("recurringEventId")
+    state.recurring_event_id = recurring_id
     original_start = item.get("originalStartTime") or {}
     state.original_start = original_start.get("dateTime") or original_start.get("date")
     state.html_link = item.get("htmlLink") or ""
-    await _replace_attendees(session, event.id, item.get("attendees") or [])
-    return GoogleSyncChange(event.id, action)
+    await _replace_attendees(session, occurrence.id, item.get("attendees") or [])
+    return GoogleSyncChange(occurrence.id, action)
 
 
 async def sync_google_calendar(db: Database, settings: Settings, calendar_id: int,
@@ -560,15 +587,17 @@ async def adopt_google_calendar(db: Database, settings: Settings, telegram_id: i
             await session.commit()
         invitation_url = f"https://t.me/{participant_bot_username}?start={invitation.token}"
         rows = (await session.execute(
-            select(GoogleEventLink.google_event_id, GoogleEventState.recurring_event_id, Event.id)
-            .join(Event, Event.id == GoogleEventLink.event_id)
-            .outerjoin(GoogleEventState, GoogleEventState.event_id == Event.id)
+            select(GoogleEventLink.google_event_id, GoogleEventState.recurring_event_id, EventOccurrence.id)
+            .join(EventOccurrence, EventOccurrence.id == GoogleEventLink.occurrence_id)
+            .join(Event, Event.id == EventOccurrence.event_id)
+            .outerjoin(GoogleEventState, GoogleEventState.occurrence_id == EventOccurrence.id)
             .where(
                 Event.calendar_id == calendar_id,
                 Event.status == "active",
-                Event.end_utc > utcnow(),
+                EventOccurrence.status == "active",
+                EventOccurrence.end_utc > utcnow(),
                 select(GoogleEventAttendee.id).where(
-                    GoogleEventAttendee.event_id == Event.id).exists(),
+                    GoogleEventAttendee.occurrence_id == EventOccurrence.id).exists(),
             )
         )).all()
         targets = {recurring_id or google_event_id for google_event_id, recurring_id, _ in rows}
@@ -603,8 +632,9 @@ async def _load_sync_context(session: AsyncSession, calendar: Calendar) -> tuple
     return account, link
 
 
-async def sync_created_events(db: Database, settings: Settings, calendar: Calendar, events: list[Event]) -> None:
-    if not google_enabled(settings) or not events:
+async def sync_created_events(db: Database, settings: Settings, calendar: Calendar,
+                               occurrences: list[EventOccurrence]) -> None:
+    if not google_enabled(settings) or not occurrences:
         return
     async with db.sessions() as session:
         ctx = await _load_sync_context(session, calendar)
@@ -612,28 +642,32 @@ async def sync_created_events(db: Database, settings: Settings, calendar: Calend
             return
         account, link = ctx
         latest_creds: Credentials | None = None
-        for event in events:
+        for occurrence in occurrences:
             try:
-                body = event_to_google_body(event, calendar)
+                if occurrence.event is None:
+                    await session.refresh(occurrence, attribute_names=["event"])
+                body = event_to_google_body(occurrence, calendar)
                 loop = asyncio.get_running_loop()
                 google_event_id, creds = await loop.run_in_executor(
                     None, lambda b=body: _insert_event_sync(settings, account, link.google_calendar_id, b))
                 latest_creds = creds
-                existing = await session.get(GoogleEventLink, event.id)
+                existing = await session.get(GoogleEventLink, occurrence.id)
                 if existing:
                     existing.google_event_id = google_event_id
                     existing.google_calendar_id = link.google_calendar_id
                 else:
                     session.add(GoogleEventLink(
-                        event_id=event.id, google_event_id=google_event_id, google_calendar_id=link.google_calendar_id))
+                        occurrence_id=occurrence.id, google_event_id=google_event_id,
+                        google_calendar_id=link.google_calendar_id))
             except Exception as exc:
-                logger.warning("Google sync create failed for event %s: %s", event.id, exc)
+                logger.warning("Google sync create failed for occurrence %s: %s", occurrence.id, exc)
         await session.commit()
         if latest_creds:
             await _persist_refreshed_tokens(session, account, latest_creds)
 
 
-async def sync_changed_event(db: Database, settings: Settings, event: Event, calendar: Calendar, *, cancelled: bool) -> None:
+async def sync_changed_event(db: Database, settings: Settings, occurrence: EventOccurrence, calendar: Calendar,
+                             *, cancelled: bool) -> None:
     if not google_enabled(settings):
         return
     async with db.sessions() as session:
@@ -641,7 +675,7 @@ async def sync_changed_event(db: Database, settings: Settings, event: Event, cal
         if not ctx:
             return
         account, link = ctx
-        mapping = await session.get(GoogleEventLink, event.id)
+        mapping = await session.get(GoogleEventLink, occurrence.id)
         if not mapping:
             return
         loop = asyncio.get_running_loop()
@@ -653,13 +687,15 @@ async def sync_changed_event(db: Database, settings: Settings, event: Event, cal
                     lambda: _delete_event_sync(settings, account, mapping.google_calendar_id, mapping.google_event_id))
                 await session.delete(mapping)
             else:
-                body = event_to_google_body(event, calendar)
+                if occurrence.event is None:
+                    await session.refresh(occurrence, attribute_names=["event"])
+                body = event_to_google_body(occurrence, calendar)
                 latest_creds = await loop.run_in_executor(
                     None,
                     lambda: _update_event_sync(
                         settings, account, mapping.google_calendar_id, mapping.google_event_id, body))
         except Exception as exc:
-            logger.warning("Google sync change failed for event %s: %s", event.id, exc)
+            logger.warning("Google sync change failed for occurrence %s: %s", occurrence.id, exc)
         await session.commit()
         if latest_creds:
             await _persist_refreshed_tokens(session, account, latest_creds)

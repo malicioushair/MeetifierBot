@@ -147,7 +147,7 @@ def calendars_keyboard(
     return attach_flow_nav(markup, locale, show_back=show_back) if with_nav else markup
 
 
-def events_keyboard(
+def event_series_keyboard(
     events: list[Event],
     prefix: str,
     locale: str | None = None,
@@ -157,41 +157,106 @@ def events_keyboard(
 ) -> InlineKeyboardMarkup:
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=e.title, callback_data=f"{prefix}:{e.id}")] for e in events
+            [InlineKeyboardButton(text=event.title, callback_data=f"{prefix}:{event.id}")]
+            for event in events
         ]
     )
     return attach_flow_nav(markup, locale, show_back=show_back) if with_nav else markup
 
 
-def event_confirm_keyboard(event_id: int, locale: str | None = None) -> InlineKeyboardMarkup:
+def occurrences_keyboard(
+    items: list[tuple[str, int]],
+    prefix: str,
+    locale: str | None = None,
+    *,
+    with_nav: bool = True,
+    show_back: bool = True,
+) -> InlineKeyboardMarkup:
+    """items: (button label, occurrence_id)."""
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=label, callback_data=f"{prefix}:{occurrence_id}")]
+            for label, occurrence_id in items
+        ]
+    )
+    return attach_flow_nav(markup, locale, show_back=show_back) if with_nav else markup
+
+
+def event_confirm_keyboard(occurrence_id: int, locale: str | None = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(
             text=t(locale, "btn_confirm_attendance"),
-            callback_data=f"p_confirm:{event_id}",
+            callback_data=f"p_confirm:{occurrence_id}",
         )]]
     )
 
 
-def upcoming_confirm_keyboard(
-    events: list[Event],
-    confirmed_ids: set[int],
-    locale: str | None = None,
-    *,
-    with_nav: bool = True,
-) -> InlineKeyboardMarkup:
-    buttons = []
-    for event in events:
-        if event.id in confirmed_ids:
-            continue
-        buttons.append([InlineKeyboardButton(text=f"✅ {event.title}", callback_data=f"p_confirm:{event.id}")])
-    markup = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else InlineKeyboardMarkup(inline_keyboard=[])
-    return attach_flow_nav(markup, locale, show_back=False) if with_nav else markup
+def recurrence_pattern_keyboard(locale: str | None = None) -> InlineKeyboardMarkup:
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(locale, "btn_pattern_once"), callback_data="o_pat:once")],
+        [InlineKeyboardButton(text=t(locale, "btn_pattern_weekly"), callback_data="o_pat:weekly")],
+        [InlineKeyboardButton(text=t(locale, "btn_pattern_monthly"), callback_data="o_pat:monthly_nth")],
+    ])
+    return attach_flow_nav(markup, locale, show_back=True)
 
 
-def confirm_cancel_keyboard(event_id: int, locale: str | None = None) -> InlineKeyboardMarkup:
+def weekdays_keyboard(selected: set[int], locale: str | None = None) -> InlineKeyboardMarkup:
+    labels = [t(locale, f"wd_{i}") for i in range(7)]
+    rows = []
+    row = []
+    for i, label in enumerate(labels):
+        mark = "✓ " if i in selected else ""
+        row.append(InlineKeyboardButton(text=f"{mark}{label}", callback_data=f"o_wd_tog:{i}"))
+        if len(row) == 4:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text=t(locale, "btn_weekdays_done"), callback_data="o_wd_done")])
+    return attach_flow_nav(InlineKeyboardMarkup(inline_keyboard=rows), locale, show_back=True)
+
+
+def monthly_pos_keyboard(locale: str | None = None) -> InlineKeyboardMarkup:
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=t(locale, "btn_nth_1"), callback_data="o_nth:1"),
+            InlineKeyboardButton(text=t(locale, "btn_nth_2"), callback_data="o_nth:2"),
+        ],
+        [
+            InlineKeyboardButton(text=t(locale, "btn_nth_3"), callback_data="o_nth:3"),
+            InlineKeyboardButton(text=t(locale, "btn_nth_4"), callback_data="o_nth:4"),
+        ],
+        [InlineKeyboardButton(text=t(locale, "btn_nth_last"), callback_data="o_nth:-1")],
+    ])
+    return attach_flow_nav(markup, locale, show_back=True)
+
+
+def weekday_pick_keyboard(prefix: str, locale: str | None = None) -> InlineKeyboardMarkup:
+    labels = [t(locale, f"wd_{i}") for i in range(7)]
+    rows = []
+    row = []
+    for i, label in enumerate(labels):
+        row.append(InlineKeyboardButton(text=label, callback_data=f"{prefix}:{i}"))
+        if len(row) == 4:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return attach_flow_nav(InlineKeyboardMarkup(inline_keyboard=rows), locale, show_back=True)
+
+
+def edit_scope_keyboard(prefix: str, locale: str | None = None) -> InlineKeyboardMarkup:
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(locale, "btn_scope_one"), callback_data=f"{prefix}:one")],
+        [InlineKeyboardButton(text=t(locale, "btn_scope_following"), callback_data=f"{prefix}:following")],
+    ])
+    return attach_flow_nav(markup, locale, show_back=True)
+
+
+def confirm_cancel_keyboard(occurrence_id: int, locale: str | None = None) -> InlineKeyboardMarkup:
     markup = InlineKeyboardMarkup(
         inline_keyboard=[[
-            InlineKeyboardButton(text=t(locale, "btn_yes_cancel"), callback_data=f"o_cancel_yes:{event_id}"),
+            InlineKeyboardButton(text=t(locale, "btn_yes_cancel"), callback_data=f"o_cancel_yes:{occurrence_id}"),
         ]]
     )
     return attach_flow_nav(markup, locale, show_back=True)

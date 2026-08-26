@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import secrets
-import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from .config import format_timezone_offset, parse_timezone_offset, tzinfo_from_offset, validate_timezone
-from .db import Calendar, Event, EventConfirmation, Invitation, NotificationJob, Subscription, User, utcnow
+from .db import (
+    Calendar, Event, EventConfirmation, EventOccurrence, Invitation, NotificationJob, Subscription, User, utcnow,
+)
 from .i18n import DEFAULT_LOCALE, normalize_locale
+from .recurrence import RecurrenceRule
 
 
 def parse_minutes(value: str) -> list[int]:
@@ -47,17 +50,80 @@ def week_bounds_utc(tz_offset_hours: int | str) -> tuple[datetime, datetime]:
     )
 
 
+def _apply_occurrence_range(query, range_mode: str, tz_offset_hours: int | str, now: datetime):
+    if range_mode == "week":
+        start, end = week_bounds_utc(tz_offset_hours)
+        return query.where(EventOccurrence.start_utc >= start, EventOccurrence.start_utc < end)
+    if range_mode in {"next", "future"}:
+        return query.where(EventOccurrence.start_utc > now)
+    raise ValueError("Range must be 'next', 'week', or 'future'")
+
+
 async def calendar_events(session: AsyncSession, calendar_id: int, range_mode: str,
-                          tz_offset_hours: int | str) -> list[Event]:
+                          tz_offset_hours: int | str) -> list[EventOccurrence]:
     if range_mode not in {"next", "week"}:
         raise ValueError("Range must be 'next' or 'week'")
     now = utcnow()
-    query = select(Event).where(Event.calendar_id == calendar_id, Event.status == "active")
+    query = (
+        select(EventOccurrence)
+        .join(Event)
+        .options(selectinload(EventOccurrence.event))
+        .where(
+            Event.calendar_id == calendar_id,
+            Event.status == "active",
+            EventOccurrence.status == "active",
+        )
+    )
+    query = _apply_occurrence_range(query, range_mode, tz_offset_hours, now)
+    query = query.order_by(EventOccurrence.start_utc)
     if range_mode == "next":
-        query = query.where(Event.start_utc > now).order_by(Event.start_utc).limit(1)
+        query = query.limit(1)
+    return list((await session.scalars(query)).all())
+
+
+async def calendar_event_series(session: AsyncSession, calendar_id: int, range_mode: str = "future",
+                                tz_offset_hours: int | str = 0) -> list[Event]:
+    """Event series in a calendar that have at least one occurrence in the given range."""
+    if range_mode not in {"next", "week", "future"}:
+        raise ValueError("Range must be 'next', 'week', or 'future'")
+    now = utcnow()
+    matching = (
+        select(EventOccurrence.event_id, func.min(EventOccurrence.start_utc).label("soonest"))
+        .join(Event)
+        .where(
+            Event.calendar_id == calendar_id,
+            Event.status == "active",
+            EventOccurrence.status == "active",
+        )
+    )
+    matching = _apply_occurrence_range(matching, range_mode if range_mode != "next" else "future",
+                                       tz_offset_hours, now)
+    matching = matching.group_by(EventOccurrence.event_id).subquery()
+    query = (
+        select(Event)
+        .join(matching, Event.id == matching.c.event_id)
+        .order_by(matching.c.soonest, Event.title)
+    )
+    return list((await session.scalars(query)).all())
+
+
+async def event_occurrences(session: AsyncSession, event_id: int, range_mode: str = "future",
+                            tz_offset_hours: int | str = 0, limit: int = 50) -> list[EventOccurrence]:
+    """Upcoming (or in-range) occurrences for one event series."""
+    if range_mode not in {"next", "week", "future"}:
+        raise ValueError("Range must be 'next', 'week', or 'future'")
+    now = utcnow()
+    query = (
+        select(EventOccurrence)
+        .options(selectinload(EventOccurrence.event))
+        .where(EventOccurrence.event_id == event_id, EventOccurrence.status == "active")
+    )
+    query = _apply_occurrence_range(query, range_mode, tz_offset_hours, now)
+    query = query.order_by(EventOccurrence.start_utc)
+    if range_mode == "next":
+        query = query.limit(1)
     else:
-        start, end = week_bounds_utc(tz_offset_hours)
-        query = query.where(Event.start_utc >= start, Event.start_utc < end).order_by(Event.start_utc)
+        query = query.limit(limit)
     return list((await session.scalars(query)).all())
 
 
@@ -105,40 +171,58 @@ async def owned_calendar(session: AsyncSession, telegram_id: int, calendar_id: i
         Calendar.id == calendar_id, User.telegram_id == telegram_id))
 
 
-async def create_events(session: AsyncSession, owner_telegram_id: int, calendar_id: int, title: str,
-                        local_start: str, duration_minutes: int, weeks: int = 1) -> list[Event]:
+async def create_events(
+    session: AsyncSession,
+    owner_telegram_id: int,
+    calendar_id: int,
+    title: str,
+    local_start: str,
+    duration_minutes: int,
+    weeks: int | None = None,
+    rule: RecurrenceRule | None = None,
+) -> list[EventOccurrence]:
+    from .recurrence import generate_starts_utc, parse_local_naive, rule_from_legacy_weeks
+
     calendar = await owned_calendar(session, owner_telegram_id, calendar_id)
     if not calendar:
         raise PermissionError("Calendar not found or not owned by you")
-    if not 1 <= duration_minutes <= 10080 or not 1 <= weeks <= 52:
-        raise ValueError("Duration must be 1..10080 minutes and weeks must be 1..52")
-    start = local_to_utc(local_start, calendar.timezone)
-    group = str(uuid.uuid4()) if weeks > 1 else None
-    events = []
-    for week in range(weeks):
-        occurrence_start = start + timedelta(weeks=week)
-        event = Event(calendar_id=calendar.id, title=title.strip(), start_utc=occurrence_start,
-                      end_utc=occurrence_start + timedelta(minutes=duration_minutes), recurrence_group=group)
-        session.add(event)
-        events.append(event)
+    if rule is None:
+        if weeks is None:
+            weeks = 1
+        anchor_weekday = parse_local_naive(local_start).weekday()
+        rule = rule_from_legacy_weeks(weeks, anchor_weekday)
+    starts = generate_starts_utc(rule, local_start, calendar.timezone, duration_minutes)
+    event = Event(calendar_id=calendar.id, title=title.strip(), recurrence_json=rule.to_json())
+    session.add(event)
     await session.flush()
-    for event in events:
-        await create_jobs_for_event(session, event, calendar)
+    occurrences: list[EventOccurrence] = []
+    for start_utc, end_utc in starts:
+        occurrence = EventOccurrence(event_id=event.id, start_utc=start_utc, end_utc=end_utc)
+        session.add(occurrence)
+        occurrences.append(occurrence)
+    await session.flush()
+    for occurrence in occurrences:
+        await session.refresh(occurrence, attribute_names=["event"])
+        await create_jobs_for_occurrence(session, occurrence, calendar)
     await session.commit()
-    return events
+    for occurrence in occurrences:
+        await session.refresh(occurrence, attribute_names=["event"])
+    return occurrences
 
 
-async def create_jobs_for_event(session: AsyncSession, event: Event, calendar: Calendar) -> None:
+async def create_jobs_for_occurrence(session: AsyncSession, occurrence: EventOccurrence, calendar: Calendar) -> None:
     subscriptions = (await session.scalars(select(Subscription).where(
         Subscription.calendar_id == calendar.id, Subscription.active.is_(True)))).all()
     now = utcnow()
     for sub in subscriptions:
         minutes = parse_minutes(sub.custom_reminder_minutes or calendar.reminder_minutes)
         for minute in minutes:
-            scheduled = event.start_utc - timedelta(minutes=minute)
+            scheduled = occurrence.start_utc - timedelta(minutes=minute)
             if scheduled >= now:
-                session.add(NotificationJob(event_id=event.id, user_id=sub.user_id, kind=f"reminder:{minute}",
-                                            event_version=event.version, scheduled_at=scheduled))
+                session.add(NotificationJob(
+                    occurrence_id=occurrence.id, user_id=sub.user_id, kind=f"reminder:{minute}",
+                    occurrence_version=occurrence.version, scheduled_at=scheduled,
+                ))
 
 
 async def make_invitation(session: AsyncSession, owner_id: int, calendar_id: int) -> Invitation:
@@ -169,67 +253,130 @@ async def subscribe(session: AsyncSession, telegram_id: int, token: str, default
         sub = Subscription(user_id=user.id, calendar_id=calendar.id)
         session.add(sub)
     await session.flush()
-    future_events = (await session.scalars(select(Event).where(
-        Event.calendar_id == calendar.id, Event.status == "active", Event.start_utc > utcnow()))).all()
-    for event in future_events:
-        await create_jobs_for_subscriber(session, event, calendar, sub)
+    future = (await session.scalars(
+        select(EventOccurrence).join(Event).where(
+            Event.calendar_id == calendar.id,
+            Event.status == "active",
+            EventOccurrence.status == "active",
+            EventOccurrence.start_utc > utcnow(),
+        )
+    )).all()
+    for occurrence in future:
+        await create_jobs_for_subscriber(session, occurrence, calendar, sub)
     await session.commit()
     return calendar
 
 
-async def create_jobs_for_subscriber(session: AsyncSession, event: Event, calendar: Calendar, sub: Subscription) -> None:
+async def create_jobs_for_subscriber(
+    session: AsyncSession, occurrence: EventOccurrence, calendar: Calendar, sub: Subscription,
+) -> None:
     for minute in parse_minutes(sub.custom_reminder_minutes or calendar.reminder_minutes):
-        scheduled = event.start_utc - timedelta(minutes=minute)
+        scheduled = occurrence.start_utc - timedelta(minutes=minute)
         if scheduled >= utcnow():
             existing = await session.scalar(select(NotificationJob.id).where(
-                NotificationJob.event_id == event.id, NotificationJob.user_id == sub.user_id,
-                NotificationJob.kind == f"reminder:{minute}", NotificationJob.event_version == event.version))
+                NotificationJob.occurrence_id == occurrence.id, NotificationJob.user_id == sub.user_id,
+                NotificationJob.kind == f"reminder:{minute}",
+                NotificationJob.occurrence_version == occurrence.version))
             if not existing:
-                session.add(NotificationJob(event_id=event.id, user_id=sub.user_id, kind=f"reminder:{minute}",
-                                            event_version=event.version, scheduled_at=scheduled))
+                session.add(NotificationJob(
+                    occurrence_id=occurrence.id, user_id=sub.user_id, kind=f"reminder:{minute}",
+                    occurrence_version=occurrence.version, scheduled_at=scheduled,
+                ))
 
 
-async def change_event(session: AsyncSession, owner_id: int, event_id: int, new_local_start: str | None = None,
-                       cancel: bool = False) -> Event:
-    event = await session.scalar(select(Event).join(Calendar).join(User).where(
-        Event.id == event_id, User.telegram_id == owner_id))
-    if not event:
+async def change_event(
+    session: AsyncSession,
+    owner_id: int,
+    occurrence_id: int,
+    new_local_start: str | None = None,
+    cancel: bool = False,
+    scope: str = "one",
+) -> list[EventOccurrence]:
+    """Change one occurrence or this and all following active occurrences in the series."""
+    if scope not in {"one", "following"}:
+        raise ValueError("Scope must be 'one' or 'following'")
+    occurrence = await session.scalar(
+        select(EventOccurrence)
+        .join(Event)
+        .join(Calendar)
+        .join(User)
+        .options(selectinload(EventOccurrence.event))
+        .where(EventOccurrence.id == occurrence_id, User.telegram_id == owner_id)
+    )
+    if not occurrence:
         raise PermissionError("Event not found or not owned by you")
-    calendar = await session.get(Calendar, event.calendar_id)
-    await session.execute(update(NotificationJob).where(
-        NotificationJob.event_id == event.id, NotificationJob.state == "pending").values(state="obsolete"))
-    event.version += 1
-    if cancel:
-        event.status = "cancelled"
-        await session.execute(delete(EventConfirmation).where(EventConfirmation.event_id == event.id))
-    else:
-        await session.execute(delete(EventConfirmation).where(EventConfirmation.event_id == event.id))
-        duration = event.end_utc - event.start_utc
-        event.start_utc = local_to_utc(new_local_start or "", calendar.timezone)
-        event.end_utc = event.start_utc + duration
-        await create_jobs_for_event(session, event, calendar)
+    calendar = await session.get(Calendar, occurrence.event.calendar_id)
+    targets = [occurrence]
+    if scope == "following":
+        following = list((await session.scalars(
+            select(EventOccurrence)
+            .options(selectinload(EventOccurrence.event))
+            .where(
+                EventOccurrence.event_id == occurrence.event_id,
+                EventOccurrence.status == "active",
+                EventOccurrence.start_utc > occurrence.start_utc,
+            )
+            .order_by(EventOccurrence.start_utc)
+        )).all())
+        targets.extend(following)
+
+    delta: timedelta | None = None
+    if not cancel:
+        new_start = local_to_utc(new_local_start or "", calendar.timezone)
+        delta = new_start - occurrence.start_utc
+
+    changed: list[EventOccurrence] = []
+    for target in targets:
+        await session.execute(update(NotificationJob).where(
+            NotificationJob.occurrence_id == target.id, NotificationJob.state == "pending",
+        ).values(state="obsolete"))
+        target.version += 1
+        await session.execute(delete(EventConfirmation).where(EventConfirmation.occurrence_id == target.id))
+        if cancel:
+            target.status = "cancelled"
+        else:
+            assert delta is not None
+            duration = target.end_utc - target.start_utc
+            target.start_utc = target.start_utc + delta
+            target.end_utc = target.start_utc + duration
+            await create_jobs_for_occurrence(session, target, calendar)
+        changed.append(target)
     await session.commit()
-    return event
+    for target in changed:
+        await session.refresh(target, attribute_names=["event"])
+    return changed
 
 
 async def upcoming_for_user(session: AsyncSession, telegram_id: int, range_mode: str = "week",
-                            default_tz: int | str = 0, limit: int = 50) -> list[tuple[Event, Calendar]]:
+                            default_tz: int | str = 0, limit: int = 50) -> list[tuple[EventOccurrence, Calendar]]:
     if range_mode not in {"next", "week", "future"}:
         raise ValueError("Range must be 'next', 'week', or 'future'")
     user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
     tz = user.timezone if user else default_tz
     now = utcnow()
-    query = (select(Event, Calendar).join(Calendar).join(Subscription).join(User).where(
-        User.telegram_id == telegram_id, Subscription.active.is_(True), Event.status == "active"))
+    query = (
+        select(EventOccurrence, Calendar)
+        .join(Event, EventOccurrence.event_id == Event.id)
+        .join(Calendar, Event.calendar_id == Calendar.id)
+        .join(Subscription, Subscription.calendar_id == Calendar.id)
+        .join(User, User.id == Subscription.user_id)
+        .options(selectinload(EventOccurrence.event))
+        .where(
+            User.telegram_id == telegram_id,
+            Subscription.active.is_(True),
+            Event.status == "active",
+            EventOccurrence.status == "active",
+        )
+    )
     if range_mode == "next":
-        query = query.where(Event.start_utc > now).order_by(Event.start_utc).limit(1)
+        query = query.where(EventOccurrence.start_utc > now).order_by(EventOccurrence.start_utc).limit(1)
     elif range_mode == "week":
         start, end = week_bounds_utc(tz)
-        query = query.where(Event.start_utc >= start, Event.start_utc < end).order_by(Event.start_utc).limit(limit)
-    elif range_mode == "future":
-        query = query.where(Event.start_utc > now).order_by(Event.start_utc).limit(limit)
+        query = query.where(
+            EventOccurrence.start_utc >= start, EventOccurrence.start_utc < end,
+        ).order_by(EventOccurrence.start_utc).limit(limit)
     else:
-        raise ValueError("Range must be 'next', 'week', or 'future'")
+        query = query.where(EventOccurrence.start_utc > now).order_by(EventOccurrence.start_utc).limit(limit)
     rows = await session.execute(query)
     return list(rows.tuples())
 
@@ -248,73 +395,94 @@ async def set_subscription_state(session: AsyncSession, telegram_id: int, calend
         User.telegram_id == telegram_id, Subscription.calendar_id == calendar_id))
     if not sub:
         return False
-    if action == "mute": sub.muted = True
-    elif action == "unmute": sub.muted = False
-    elif action == "unsubscribe": sub.active = False
-    else: raise ValueError("Unknown action")
+    if action == "mute":
+        sub.muted = True
+    elif action == "unmute":
+        sub.muted = False
+    elif action == "unsubscribe":
+        sub.active = False
+    else:
+        raise ValueError("Unknown action")
     if not sub.active:
+        occurrence_ids = select(EventOccurrence.id).join(Event).where(Event.calendar_id == calendar_id)
         await session.execute(update(NotificationJob).where(
             NotificationJob.user_id == sub.user_id,
-            NotificationJob.event_id.in_(select(Event.id).where(Event.calendar_id == calendar_id)),
-            NotificationJob.state == "pending").values(state="obsolete"))
+            NotificationJob.occurrence_id.in_(occurrence_ids),
+            NotificationJob.state == "pending",
+        ).values(state="obsolete"))
     await session.commit()
     return True
 
 
-async def confirm_event(session: AsyncSession, telegram_id: int, event_id: int, display_name: str,
-                        default_tz: int | str) -> tuple[Event, Calendar, User, bool]:
+async def confirm_event(session: AsyncSession, telegram_id: int, occurrence_id: int, display_name: str,
+                        default_tz: int | str) -> tuple[EventOccurrence, Calendar, User, bool]:
     user = await get_or_create_user(session, telegram_id, default_tz)
-    event = await session.scalar(select(Event).where(Event.id == event_id, Event.status == "active", Event.start_utc > utcnow()))
-    if not event:
+    occurrence = await session.scalar(
+        select(EventOccurrence)
+        .options(selectinload(EventOccurrence.event))
+        .where(
+            EventOccurrence.id == occurrence_id,
+            EventOccurrence.status == "active",
+            EventOccurrence.start_utc > utcnow(),
+        )
+    )
+    if not occurrence:
         raise ValueError("Event not found or no longer active")
-    calendar = await session.get(Calendar, event.calendar_id)
+    calendar = await session.get(Calendar, occurrence.event.calendar_id)
     sub = await session.scalar(select(Subscription).where(
         Subscription.user_id == user.id, Subscription.calendar_id == calendar.id, Subscription.active.is_(True)))
     if not sub:
         raise PermissionError("You are not subscribed to this calendar")
     existing = await session.scalar(select(EventConfirmation).where(
-        EventConfirmation.event_id == event.id, EventConfirmation.user_id == user.id))
+        EventConfirmation.occurrence_id == occurrence.id, EventConfirmation.user_id == user.id))
     if existing:
-        return event, calendar, await session.get(User, calendar.owner_user_id), False
-    session.add(EventConfirmation(event_id=event.id, user_id=user.id, display_name=display_name.strip() or str(telegram_id)))
+        return occurrence, calendar, await session.get(User, calendar.owner_user_id), False
+    session.add(EventConfirmation(
+        occurrence_id=occurrence.id, user_id=user.id,
+        display_name=display_name.strip() or str(telegram_id),
+    ))
     await session.commit()
-    return event, calendar, await session.get(User, calendar.owner_user_id), True
+    await session.refresh(occurrence, attribute_names=["event"])
+    return occurrence, calendar, await session.get(User, calendar.owner_user_id), True
 
 
-async def confirmations_for_event(session: AsyncSession, owner_telegram_id: int, event_id: int) -> list[EventConfirmation]:
-    event = await session.scalar(select(Event).join(Calendar).join(User).where(
-        Event.id == event_id, User.telegram_id == owner_telegram_id))
-    if not event:
+async def confirmations_for_event(session: AsyncSession, owner_telegram_id: int,
+                                  occurrence_id: int) -> list[EventConfirmation]:
+    occurrence = await session.scalar(
+        select(EventOccurrence).join(Event).join(Calendar).join(User).where(
+            EventOccurrence.id == occurrence_id, User.telegram_id == owner_telegram_id))
+    if not occurrence:
         raise PermissionError("Event not found or not owned by you")
     return list((await session.scalars(select(EventConfirmation).where(
-        EventConfirmation.event_id == event_id).order_by(EventConfirmation.confirmed_at))).all())
+        EventConfirmation.occurrence_id == occurrence_id).order_by(EventConfirmation.confirmed_at))).all())
 
 
-async def confirmed_event_ids(session: AsyncSession, user_id: int, event_ids: list[int]) -> set[int]:
-    if not event_ids:
+async def confirmed_occurrence_ids(session: AsyncSession, user_id: int, occurrence_ids: list[int]) -> set[int]:
+    if not occurrence_ids:
         return set()
-    rows = await session.scalars(select(EventConfirmation.event_id).where(
-        EventConfirmation.user_id == user_id, EventConfirmation.event_id.in_(event_ids)))
+    rows = await session.scalars(select(EventConfirmation.occurrence_id).where(
+        EventConfirmation.user_id == user_id, EventConfirmation.occurrence_id.in_(occurrence_ids)))
     return set(rows.all())
 
 
 async def upcoming_for_user_with_status(session: AsyncSession, telegram_id: int, range_mode: str = "week",
-                                        default_tz: int | str = 0) -> list[tuple[Event, Calendar, bool]]:
+                                        default_tz: int | str = 0) -> list[tuple[EventOccurrence, Calendar, bool]]:
     rows = await upcoming_for_user(session, telegram_id, range_mode, default_tz)
     if not rows:
         return []
     user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
     if not user:
-        return [(e, c, False) for e, c in rows]
-    confirmed = await confirmed_event_ids(session, user.id, [e.id for e, _ in rows])
-    return [(e, c, e.id in confirmed) for e, c in rows]
+        return [(occ, calendar, False) for occ, calendar in rows]
+    confirmed = await confirmed_occurrence_ids(session, user.id, [occ.id for occ, _ in rows])
+    return [(occ, calendar, occ.id in confirmed) for occ, calendar in rows]
 
 
 async def set_reminders(session: AsyncSession, telegram_id: int, calendar_id: int, value: str) -> bool:
     parse_minutes(value)
     sub = await session.scalar(select(Subscription).join(User).where(
         User.telegram_id == telegram_id, Subscription.calendar_id == calendar_id, Subscription.active.is_(True)))
-    if not sub: return False
+    if not sub:
+        return False
     sub.custom_reminder_minutes = value
     await session.commit()
     return True

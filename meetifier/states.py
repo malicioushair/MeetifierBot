@@ -13,18 +13,27 @@ class OrganizerNewEvent(StatesGroup):
     title = State()
     start = State()
     duration = State()
-    weeks = State()
+    pattern = State()
+    weekdays = State()
+    interval = State()
+    monthly_pos = State()
+    monthly_weekday = State()
+    count = State()
 
 
 class OrganizerReschedule(StatesGroup):
     calendar = State()
-    event = State()
+    series = State()
+    occurrence = State()
+    scope = State()
     new_start = State()
 
 
 class OrganizerCancelEvent(StatesGroup):
     calendar = State()
-    event = State()
+    series = State()
+    occurrence = State()
+    scope = State()
     confirm = State()
 
 
@@ -35,11 +44,13 @@ class OrganizerInvite(StatesGroup):
 class OrganizerEvents(StatesGroup):
     range_pick = State()
     calendar = State()
+    series = State()
 
 
 class OrganizerConfirmations(StatesGroup):
     calendar = State()
-    event = State()
+    series = State()
+    occurrence = State()
 
 
 class OrganizerGoogleMap(StatesGroup):
@@ -71,10 +82,14 @@ class ParticipantReminders(StatesGroup):
 
 class ParticipantUpcoming(StatesGroup):
     range_pick = State()
+    calendar = State()
+    series = State()
 
 
 class ParticipantConfirmPick(StatesGroup):
-    pick = State()
+    calendar = State()
+    series = State()
+    occurrence = State()
 
 
 class ParticipantMute(StatesGroup):
