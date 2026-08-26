@@ -83,9 +83,45 @@ python -m pytest -q
 
 The tests cover timezone conversion, weekly recurrence, job creation, reschedule invalidation, and unsubscribe cleanup. No Telegram tokens or network are needed.
 
+## Google Calendar (optional, two-way event sync)
+
+Organizers can import an already-filled Google Calendar or map an existing Meetifier calendar. Google-originated
+events are imported into Meetifier for Telegram reminders and confirmations; bot-created events continue to be
+written to Google. Changes and cancellations made on either side are synchronized.
+
+1. Create a Google Cloud project, enable **Google Calendar API**, and create an **OAuth 2.0 Web client**.
+2. Add redirect URI: `http://127.0.0.1:8080/oauth/google/callback` (or your public URL in production).
+3. Set in `.env`:
+
+```env
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_REDIRECT_URI=http://127.0.0.1:8080/oauth/google/callback
+OAUTH_HOST=127.0.0.1
+OAUTH_PORT=8080
+```
+
+4. Restart the app and tap **🔗 Link Google** in **Organizer Bot** to complete OAuth.
+5. Choose one of these paths:
+   - **⬇️ Import Google** creates a Meetifier calendar from an existing filled Google calendar and imports its
+     upcoming year of events.
+   - **📎 Map to Google** links an existing Meetifier calendar, imports existing Google events, and keeps exporting
+     bot-created events.
+6. Use **🔄 Sync Google** for an immediate sync. The background worker also imports changes every 60 seconds by
+   default; configure `GOOGLE_SYNC_INTERVAL_SECONDS` to change this.
+7. Use **📣 Invite Google guests** when ready to migrate participants. After confirmation, Meetifier adds its
+   Telegram subscription link to upcoming event/series descriptions and asks Google to email the existing attendees.
+   Event times, attendees, Meet links, recurrence, and other existing details are preserved.
+
+Google Calendar remains the scheduling source for imported events. Meetifier is the reminder and confirmation
+layer. A participant must tap the Telegram link and start the Participant Bot before Telegram permits reminders.
+
+For Docker, expose port `8080` and set `GOOGLE_REDIRECT_URI` to your public HTTPS callback URL.
+
 ## MVP boundaries
 
 - Weekly recurrence is materialized up to 52 occurrences; editing a whole series is not yet included.
 - Immediate update messages are best-effort. Durable scheduled reminders are retried up to five times.
 - Database tables are auto-created; add Alembic migrations before evolving a production deployment.
-- Telegram long polling is used, so HTTPS/domain setup is unnecessary. Webhooks, Google/Outlook sync, private appointments, attendance, localization, and a web dashboard are later phases.
+- Telegram long polling is used, so HTTPS/domain setup is unnecessary for the bots themselves.
+- Google changes are polled with incremental sync tokens. Push webhooks, Outlook, and a web dashboard are later phases.
