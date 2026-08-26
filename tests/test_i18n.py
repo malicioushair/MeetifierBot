@@ -10,6 +10,17 @@ def test_normalize_locale():
     assert normalize_locale("de") == "en"
 
 
+def test_onboarding_covers_flow_and_features():
+    for locale in LOCALES:
+        org = t(locale, "org.onboarding")
+        par = t(locale, "par.onboarding")
+        assert len(org) < 4096 and len(par) < 4096
+        assert "1." in org and "5." in org
+        assert "1." in par and "5." in par
+        assert "Google" in org
+        assert "1440" in par
+
+
 def test_translation_parity_and_format():
     assert set(MESSAGES) == set(LOCALES)
     keys = set(MESSAGES["en"])

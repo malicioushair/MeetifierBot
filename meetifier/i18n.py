@@ -45,8 +45,48 @@ PAR_BTN = {
 
 MESSAGES: dict[str, dict[str, str]] = {
     "en": {
-        "org.welcome": "Welcome! Use the buttons below to manage your calendars.",
-        "par.welcome": "Welcome! Use the buttons below to manage your subscriptions.",
+        "org.welcome": "Welcome to Meetifier Organizer!",
+        "par.welcome": "Welcome to Meetifier Participant!",
+        "org.onboarding": (
+            "Typical flow\n"
+            "1. Create a calendar\n"
+            "2. Add events\n"
+            "3. Send an invite link\n"
+            "4. Participants subscribe in the Participant Bot and get reminders\n"
+            "5. Reschedule or cancel when plans change; check confirmations\n\n"
+            "Menu features\n"
+            "📅 Calendars — list your calendars\n"
+            "➕ New calendar — name + timezone (e.g. Europe/Belgrade)\n"
+            "➕ New event — title, start time, duration, weeks (1 = one-time, 2–52 = weekly)\n"
+            "📋 Events — next event or this week\n"
+            "🔗 Invite — share a Telegram link so people can subscribe\n"
+            "✏️ Reschedule — pick an event and set a new start time\n"
+            "❌ Cancel event — cancel and notify subscribers\n"
+            "✅ Confirmations — who confirmed attendance\n"
+            "🔗 Link Google / 📎 Map / ⬇️ Import / 🔄 Sync / 📣 Invite Google guests — optional Google Calendar sync\n"
+            "🌐 Language — switch en / ru / sr\n"
+            "❓ Help — command examples\n\n"
+            "Tip: most actions use buttons; you can also type commands from Help."
+        ),
+        "par.onboarding": (
+            "Typical flow\n"
+            "1. Open an invite link from an organizer (or tap Subscribe)\n"
+            "2. Set your timezone\n"
+            "3. Optionally set reminder times per calendar\n"
+            "4. Check upcoming events and confirm attendance\n"
+            "5. Mute or unsubscribe when you no longer need a calendar\n\n"
+            "Menu features\n"
+            "📅 Upcoming — next event or this week\n"
+            "✅ Confirm — mark that you will attend\n"
+            "📋 Subscriptions — calendars you follow\n"
+            "🌍 Timezone — used for how times are shown to you\n"
+            "⏰ Reminders — minutes before the event (e.g. 1440,30 = 1 day and 30 min)\n"
+            "🔇 Mute / 🔊 Unmute — pause or resume reminders for a calendar\n"
+            "🚫 Unsubscribe — leave a calendar and stop jobs\n"
+            "🌐 Language — switch en / ru / sr\n"
+            "❓ Help — command examples\n\n"
+            "You must Start this bot before Telegram can deliver reminders."
+        ),
         "choose_language": "Choose your language:",
         "language_updated": "Language updated.",
         "main_menu": "Main menu:",
@@ -207,8 +247,48 @@ MESSAGES: dict[str, dict[str, str]] = {
         "cmd.language": "Change language",
     },
     "ru": {
-        "org.welcome": "Добро пожаловать! Используйте кнопки ниже для управления календарями.",
-        "par.welcome": "Добро пожаловать! Используйте кнопки ниже для управления подписками.",
+        "org.welcome": "Добро пожаловать в Meetifier Organizer!",
+        "par.welcome": "Добро пожаловать в Meetifier Participant!",
+        "org.onboarding": (
+            "Обычный сценарий\n"
+            "1. Создайте календарь\n"
+            "2. Добавьте события\n"
+            "3. Отправьте ссылку-приглашение\n"
+            "4. Участники подписываются в Participant Bot и получают напоминания\n"
+            "5. Переносите или отменяйте события; смотрите подтверждения\n\n"
+            "Кнопки меню\n"
+            "📅 Календари — список ваших календарей\n"
+            "➕ Новый календарь — название и часовой пояс (например Europe/Moscow)\n"
+            "➕ Новое событие — название, время начала, длительность, недели (1 — разово, 2–52 — еженедельно)\n"
+            "📋 События — следующее или на этой неделе\n"
+            "🔗 Пригласить — ссылка в Telegram для подписки\n"
+            "✏️ Перенести — выбрать событие и новое время\n"
+            "❌ Отменить событие — отмена и уведомление подписчиков\n"
+            "✅ Подтверждения — кто подтвердил участие\n"
+            "🔗 Связать Google / 📎 Привязать / ⬇️ Импорт / 🔄 Синхронизация / 📣 Пригласить гостей Google — опциональный синк\n"
+            "🌐 Язык — en / ru / sr\n"
+            "❓ Помощь — примеры команд\n\n"
+            "Подсказка: почти всё делается кнопками; команды есть в Помощи."
+        ),
+        "par.onboarding": (
+            "Обычный сценарий\n"
+            "1. Откройте ссылку от организатора (или нажмите Подписаться)\n"
+            "2. Укажите часовой пояс\n"
+            "3. При желании настройте напоминания для календаря\n"
+            "4. Смотрите ближайшие события и подтверждайте участие\n"
+            "5. Отключайте звук или отписывайтесь, когда календарь больше не нужен\n\n"
+            "Кнопки меню\n"
+            "📅 Ближайшие — следующее событие или эта неделя\n"
+            "✅ Подтвердить — отметить, что вы придёте\n"
+            "📋 Подписки — календари, на которые вы подписаны\n"
+            "🌍 Часовой пояс — как вам показываются времена\n"
+            "⏰ Напоминания — минуты до события (например 1440,30 = день и 30 мин)\n"
+            "🔇 Без звука / 🔊 Включить звук — пауза или возобновление напоминаний\n"
+            "🚫 Отписаться — уйти с календаря и остановить задачи\n"
+            "🌐 Язык — en / ru / sr\n"
+            "❓ Помощь — примеры команд\n\n"
+            "Нужно нажать Start в этом боте, иначе Telegram не доставит напоминания."
+        ),
         "choose_language": "Выберите язык:",
         "language_updated": "Язык обновлён.",
         "main_menu": "Главное меню:",
@@ -369,8 +449,48 @@ MESSAGES: dict[str, dict[str, str]] = {
         "cmd.language": "Сменить язык",
     },
     "sr": {
-        "org.welcome": "Dobrodošli! Koristite dugmad ispod za upravljanje kalendarima.",
-        "par.welcome": "Dobrodošli! Koristite dugmad ispod za upravljanje pretplatama.",
+        "org.welcome": "Dobrodošli u Meetifier Organizer!",
+        "par.welcome": "Dobrodošli u Meetifier Participant!",
+        "org.onboarding": (
+            "Uobičajeni tok\n"
+            "1. Napravite kalendar\n"
+            "2. Dodajte događaje\n"
+            "3. Pošaljite link pozivnice\n"
+            "4. Učesnici se pretplate u Participant Bot-u i dobijaju podsetnike\n"
+            "5. Pomerite ili otkažite događaje; proverite potvrde\n\n"
+            "Funkcije menija\n"
+            "📅 Kalendari — lista vaših kalendara\n"
+            "➕ Novi kalendar — naziv i vremenska zona (npr. Europe/Belgrade)\n"
+            "➕ Novi događaj — naslov, vreme početka, trajanje, nedelje (1 jednokratno, 2–52 nedeljno)\n"
+            "📋 Događaji — sledeći ili ova nedelja\n"
+            "🔗 Pozovi — Telegram link za pretplatu\n"
+            "✏️ Pomeri — izaberite događaj i novo vreme\n"
+            "❌ Otkaži događaj — otkazivanje i obaveštavanje pretplatnika\n"
+            "✅ Potvrde — ko je potvrdio prisustvo\n"
+            "🔗 Poveži Google / 📎 Mapiraj / ⬇️ Uvoz / 🔄 Sinhronizuj / 📣 Pozovi Google goste — opciona Google sinhronizacija\n"
+            "🌐 Jezik — en / ru / sr\n"
+            "❓ Pomoć — primeri komandi\n\n"
+            "Savet: većina akcija ide preko dugmadi; komande su u Pomoći."
+        ),
+        "par.onboarding": (
+            "Uobičajeni tok\n"
+            "1. Otvorite link od organizatora (ili dodirnite Pretplati se)\n"
+            "2. Podesite vremensku zonu\n"
+            "3. Po želji podesite podsetnike po kalendaru\n"
+            "4. Pregledajte predstojeće događaje i potvrdite prisustvo\n"
+            "5. Isključite obaveštenja ili otkažite pretplatu kad kalendar više nije potreban\n\n"
+            "Funkcije menija\n"
+            "📅 Predstojeći — sledeći događaj ili ova nedelja\n"
+            "✅ Potvrdi — označite da ćete doći\n"
+            "📋 Pretplate — kalendari koje pratite\n"
+            "🌍 Vremenska zona — kako se vama prikazuju vremena\n"
+            "⏰ Podsetnici — minuti pre događaja (npr. 1440,30 = 1 dan i 30 min)\n"
+            "🔇 Isključi / 🔊 Uključi — pauza ili nastavak podsetnika\n"
+            "🚫 Otkaži pretplatu — napustite kalendar i zaustavite poslove\n"
+            "🌐 Jezik — en / ru / sr\n"
+            "❓ Pomoć — primeri komandi\n\n"
+            "Morate pokrenuti ovaj bot (Start) da bi Telegram mogao da šalje podsetnike."
+        ),
         "choose_language": "Izaberite jezik:",
         "language_updated": "Jezik je ažuriran.",
         "main_menu": "Glavni meni:",

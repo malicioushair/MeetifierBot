@@ -93,6 +93,20 @@ async def mirror_changed_event(db: Database, settings: Settings, event: Event, *
         await sync_changed_event(db, settings, event, calendar, cancelled=cancelled)
 
 
+async def send_organizer_onboarding(message: Message, locale: str, *, with_language_picker: bool = False) -> None:
+    await message.answer(t(locale, "org.welcome"), reply_markup=organizer_main_menu(locale))
+    await message.answer(t(locale, "org.onboarding"))
+    if with_language_picker:
+        await message.answer(t(locale, "choose_language"), reply_markup=locale_keyboard("o_locale"))
+
+
+async def send_participant_onboarding(message: Message, locale: str, *, with_language_picker: bool = False) -> None:
+    await message.answer(t(locale, "par.welcome"), reply_markup=participant_main_menu(locale))
+    await message.answer(t(locale, "par.onboarding"))
+    if with_language_picker:
+        await message.answer(t(locale, "choose_language"), reply_markup=locale_keyboard("p_locale"))
+
+
 def build_organizer_router(db: Database, settings: Settings, participant_bot: Bot) -> Router:
     router = Router(name="organizer")
 
@@ -106,8 +120,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
     @router.message(CommandStart())
     async def start_handler(message: Message) -> None:
         locale = await locale_for(message.from_user.id)
-        await message.answer(t(locale, "org.welcome"), reply_markup=organizer_main_menu(locale))
-        await message.answer(t(locale, "choose_language"), reply_markup=locale_keyboard("o_locale"))
+        await send_organizer_onboarding(message, locale, with_language_picker=True)
 
     @router.message(Command("language"))
     @router.message(F.text.in_(org_texts("language")))
@@ -122,7 +135,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         async with db.sessions() as session:
             await set_locale(session, callback.from_user.id, code, settings.default_timezone)
         await callback.message.edit_text(t(code, "language_updated"))
-        await callback.message.answer(t(code, "org.welcome"), reply_markup=organizer_main_menu(code))
+        await send_organizer_onboarding(callback.message, code)
         await callback.answer()
 
     @router.message(Command("help"))
@@ -130,7 +143,8 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
     async def help_handler(message: Message, state: FSMContext) -> None:
         await state.clear()
         locale = await locale_for(message.from_user.id)
-        await message.answer(t(locale, "org.help"), reply_markup=organizer_main_menu(locale))
+        await message.answer(t(locale, "org.onboarding"), reply_markup=organizer_main_menu(locale))
+        await message.answer(t(locale, "org.help"))
 
     @router.message(Command("cancel"))
     async def cancel_command(message: Message, state: FSMContext, command: CommandObject) -> None:
@@ -851,8 +865,7 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
     @router.message(CommandStart())
     async def start_handler(message: Message) -> None:
         locale = await locale_for(message.from_user.id)
-        await message.answer(t(locale, "par.welcome"), reply_markup=participant_main_menu(locale))
-        await message.answer(t(locale, "choose_language"), reply_markup=locale_keyboard("p_locale"))
+        await send_participant_onboarding(message, locale, with_language_picker=True)
 
     @router.message(Command("language"))
     @router.message(F.text.in_(par_texts("language")))
@@ -867,7 +880,7 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
         async with db.sessions() as session:
             await set_locale(session, callback.from_user.id, code, settings.default_timezone)
         await callback.message.edit_text(t(code, "language_updated"))
-        await callback.message.answer(t(code, "par.welcome"), reply_markup=participant_main_menu(code))
+        await send_participant_onboarding(callback.message, code)
         await callback.answer()
 
     @router.message(Command("help"))
@@ -875,7 +888,8 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
     async def help_handler(message: Message, state: FSMContext) -> None:
         await state.clear()
         locale = await locale_for(message.from_user.id)
-        await message.answer(t(locale, "par.help"), reply_markup=participant_main_menu(locale))
+        await message.answer(t(locale, "par.onboarding"), reply_markup=participant_main_menu(locale))
+        await message.answer(t(locale, "par.help"))
 
     @router.message(Command("cancel"))
     async def cancel_fsm(message: Message, state: FSMContext) -> None:
