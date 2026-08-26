@@ -7,15 +7,18 @@ from aiogram.types import BotCommand, CallbackQuery, InlineKeyboardButton, Inlin
 from sqlalchemy import select
 
 from .config import Settings
-from .db import Calendar, Database, Event, Subscription, User, utcnow
-from .keyboards import (ORGANIZER_BUTTONS, ORG_CALENDARS, ORG_CANCEL, ORG_CONFIRMATIONS, ORG_EVENTS, ORG_GOOGLE_LINK,
-                        ORG_GOOGLE_MAP, ORG_HELP, ORG_INVITE, ORG_NEW_CALENDAR, ORG_NEW_EVENT, ORG_RESCHEDULE,
+from .db import Calendar, Database, Event, GoogleCalendarLink, Subscription, User, utcnow
+from .keyboards import (ORGANIZER_BUTTONS, ORG_CALENDARS, ORG_CANCEL, ORG_CONFIRMATIONS, ORG_EVENTS, ORG_GOOGLE_ADOPT,
+                        ORG_GOOGLE_IMPORT, ORG_GOOGLE_LINK, ORG_GOOGLE_MAP, ORG_GOOGLE_SYNC, ORG_HELP, ORG_INVITE,
+                        ORG_NEW_CALENDAR, ORG_NEW_EVENT, ORG_RESCHEDULE,
                         PARTICIPANT_BUTTONS, PAR_CONFIRM, PAR_HELP, PAR_MUTE, PAR_REMINDERS, PAR_SUBSCRIPTIONS,
                         PAR_TIMEZONE, PAR_UNMUTE, PAR_UNSUBSCRIBE, PAR_UPCOMING, calendars_keyboard,
-                        confirm_cancel_keyboard, event_confirm_keyboard, event_range_keyboard, events_keyboard,
+                        confirm_cancel_keyboard, confirm_google_adoption_keyboard, event_confirm_keyboard,
+                        event_range_keyboard, events_keyboard,
                         google_calendars_keyboard, organizer_main_menu, participant_main_menu, upcoming_confirm_keyboard)
-from .google_sync import (authorization_url, create_oauth_state, get_google_account, google_enabled,
-                          link_google_calendar, list_google_calendars, sync_changed_event, sync_created_events)
+from .google_sync import (adopt_google_calendar, authorization_url, create_oauth_state, get_google_account,
+                          google_enabled, import_google_calendar, link_google_calendar, list_google_calendars,
+                          sync_changed_event, sync_created_events, sync_google_calendar)
 from .service import (calendar_events, change_event, confirm_event, confirmations_for_event, create_calendar,
                       create_events, display_time, invitation_calendar, make_invitation, set_reminders,
                       set_subscription_state, set_timezone, subscribe, upcoming_for_user_with_status)
@@ -33,7 +36,8 @@ ORGANIZER_HELP = """Use the menu buttons below, or type commands directly:
 /cancel EVENT_ID
 /confirmations CALENDAR_ID
 
-Google (optional): Link Google, then Map to Google to mirror new/rescheduled/cancelled events.
+Google (optional): Link Google, then import a filled calendar or map an existing Meetifier calendar.
+Mapped calendars sync both ways. Use Invite Google guests to add the participant-bot link to upcoming events.
 
 Use WEEKS=1 for one-time events or 2..52 for weekly recurrence."""
 
@@ -330,10 +334,158 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 await link_google_calendar(
                     session, callback.from_user.id, int(calendar_id),
                     chosen["id"], chosen["name"])
-            await callback.message.edit_text(f"Mapped to Google calendar: {chosen['name']}")
-        except (ValueError, PermissionError) as exc:
+            result = await sync_google_calendar(db, settings, int(calendar_id), force_full=True)
+            await callback.message.edit_text(
+                f"Mapped to Google calendar: {chosen['name']}\n"
+                f"Imported {result.created} existing event(s); updated {result.updated}.")
+        except Exception as exc:
             await callback.message.edit_text(f"Error: {exc}")
         await state.clear()
+        await callback.answer()
+
+    @router.message(Command("googleimport"))
+    @router.message(F.text == ORG_GOOGLE_IMPORT)
+    async def google_import_start(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        if not google_enabled(settings):
+            await message.answer("Google sync is not configured on this server.", reply_markup=organizer_main_menu())
+            return
+        async with db.sessions() as session:
+            account = await get_google_account(session, message.from_user.id)
+            if not account:
+                await message.answer("Link Google first using 🔗 Link Google.", reply_markup=organizer_main_menu())
+                return
+            try:
+                google_cals = await list_google_calendars(session, settings, account)
+            except Exception as exc:
+                await message.answer(f"Could not load Google calendars: {exc}", reply_markup=organizer_main_menu())
+                return
+        if not google_cals:
+            await message.answer("No writable Google calendars found.", reply_markup=organizer_main_menu())
+            return
+        await state.update_data(google_import_calendars=google_cals)
+        names = "\n".join(f"{i + 1}. {calendar['name']}" for i, calendar in enumerate(google_cals[:10]))
+        await message.answer(
+            f"Choose a filled Google calendar to import:\n{names}",
+            reply_markup=google_calendars_keyboard(len(google_cals), "o_gimport_pick"),
+        )
+
+    @router.callback_query(F.data.startswith("o_gimport_pick:"))
+    async def google_import_pick(callback: CallbackQuery, state: FSMContext) -> None:
+        index = int(callback.data.split(":", 1)[1])
+        data = await state.get_data()
+        google_cals = data.get("google_import_calendars") or []
+        if index >= len(google_cals):
+            await callback.message.edit_text("Selection expired. Start Import Google again.")
+            await callback.answer()
+            return
+        chosen = google_cals[index]
+        try:
+            calendar, result = await import_google_calendar(
+                db, settings, callback.from_user.id, chosen)
+            await callback.message.edit_text(
+                f"Imported {chosen['name']} as Meetifier calendar #{calendar.id}.\n"
+                f"Created {result.created} event(s); updated {result.updated}; cancelled {result.cancelled}.\n"
+                "Future Google changes will sync automatically."
+            )
+        except Exception as exc:
+            await callback.message.edit_text(f"Google import failed: {exc}")
+        await state.clear()
+        await callback.answer()
+
+    async def fetch_linked_calendars(telegram_id: int) -> list[Calendar]:
+        async with db.sessions() as session:
+            return list((await session.scalars(
+                select(Calendar).join(User).join(GoogleCalendarLink).where(User.telegram_id == telegram_id)
+            )).all())
+
+    @router.message(Command("googlesync"))
+    @router.message(F.text == ORG_GOOGLE_SYNC)
+    async def google_sync_start(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        calendars = await fetch_linked_calendars(message.from_user.id)
+        if not calendars:
+            await message.answer("No calendars are linked to Google.", reply_markup=organizer_main_menu())
+            return
+        if len(calendars) == 1:
+            try:
+                result = await sync_google_calendar(db, settings, calendars[0].id)
+                await message.answer(
+                    f"Google sync complete: {result.created} new, {result.updated} updated, "
+                    f"{result.cancelled} cancelled.", reply_markup=organizer_main_menu())
+            except Exception as exc:
+                await message.answer(f"Google sync failed: {exc}", reply_markup=organizer_main_menu())
+            return
+        await message.answer("Choose a calendar to sync:", reply_markup=calendars_keyboard(calendars, "o_gsync"))
+
+    @router.callback_query(F.data.startswith("o_gsync:"))
+    async def google_sync_pick(callback: CallbackQuery) -> None:
+        calendar_id = int(callback.data.split(":", 1)[1])
+        owned = {calendar.id for calendar in await fetch_linked_calendars(callback.from_user.id)}
+        if calendar_id not in owned:
+            await callback.message.edit_text("Calendar not found or not owned by you.")
+        else:
+            try:
+                result = await sync_google_calendar(db, settings, calendar_id)
+                await callback.message.edit_text(
+                    f"Google sync complete: {result.created} new, {result.updated} updated, "
+                    f"{result.cancelled} cancelled.")
+            except Exception as exc:
+                await callback.message.edit_text(f"Google sync failed: {exc}")
+        await callback.answer()
+
+    @router.message(Command("googleinvite"))
+    @router.message(F.text == ORG_GOOGLE_ADOPT)
+    async def google_adopt_start(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        calendars = await fetch_linked_calendars(message.from_user.id)
+        if not calendars:
+            await message.answer("Import or map a Google calendar first.", reply_markup=organizer_main_menu())
+            return
+        if len(calendars) == 1:
+            calendar = calendars[0]
+            await message.answer(
+                f"This will add a Meetifier subscription link to upcoming events in {calendar.name} and ask "
+                "Google to email their attendees. Existing event details and invitations are preserved.",
+                reply_markup=confirm_google_adoption_keyboard(calendar.id),
+            )
+            return
+        await message.answer(
+            "Choose the calendar whose Google attendees should be invited:",
+            reply_markup=calendars_keyboard(calendars, "o_gadopt"),
+        )
+
+    @router.callback_query(F.data.startswith("o_gadopt:"))
+    async def google_adopt_pick(callback: CallbackQuery) -> None:
+        calendar_id = int(callback.data.split(":", 1)[1])
+        owned = {calendar.id: calendar for calendar in await fetch_linked_calendars(callback.from_user.id)}
+        calendar = owned.get(calendar_id)
+        if not calendar:
+            await callback.message.edit_text("Calendar not found or not owned by you.")
+        else:
+            await callback.message.edit_text(
+                f"This will update upcoming events in {calendar.name} and ask Google to email their attendees. Continue?",
+                reply_markup=confirm_google_adoption_keyboard(calendar_id),
+            )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("o_gadopt_yes:"))
+    async def google_adopt_confirm(callback: CallbackQuery) -> None:
+        calendar_id = int(callback.data.split(":", 1)[1])
+        try:
+            updated, total, invitation_url = await adopt_google_calendar(
+                db, settings, callback.from_user.id, calendar_id, settings.participant_bot_username)
+            await callback.message.edit_text(
+                f"Google attendee migration enabled. Updated {updated} of {total} event or series invitation(s).\n"
+                f"Participant link: {invitation_url}"
+            )
+        except Exception as exc:
+            await callback.message.edit_text(f"Could not notify Google attendees: {exc}")
+        await callback.answer()
+
+    @router.callback_query(F.data == "o_gadopt_no")
+    async def google_adopt_cancel(callback: CallbackQuery) -> None:
+        await callback.message.edit_text("Google attendee invitation cancelled.")
         await callback.answer()
 
     @router.message(Command("invite"))
@@ -892,6 +1044,9 @@ async def configure_commands(organizer: Bot, participant: Bot) -> None:
     await organizer.set_my_commands([
         BotCommand(command="calendars", description="List calendars"),
         BotCommand(command="newevent", description="Create event"),
+        BotCommand(command="googleimport", description="Import a Google calendar"),
+        BotCommand(command="googlesync", description="Sync Google now"),
+        BotCommand(command="googleinvite", description="Invite Google attendees"),
         BotCommand(command="help", description="Show help"),
     ])
     await participant.set_my_commands([

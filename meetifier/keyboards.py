@@ -15,12 +15,16 @@ ORG_CANCEL = "❌ Cancel event"
 ORG_CONFIRMATIONS = "✅ Confirmations"
 ORG_GOOGLE_LINK = "🔗 Link Google"
 ORG_GOOGLE_MAP = "📎 Map to Google"
+ORG_GOOGLE_IMPORT = "⬇️ Import Google"
+ORG_GOOGLE_SYNC = "🔄 Sync Google"
+ORG_GOOGLE_ADOPT = "📣 Invite Google guests"
 ORG_HELP = "❓ Help"
 
 ORGANIZER_BUTTONS = {
     ORG_CALENDARS, ORG_NEW_CALENDAR, ORG_NEW_EVENT, ORG_EVENTS,
     ORG_INVITE, ORG_RESCHEDULE, ORG_CANCEL, ORG_CONFIRMATIONS,
-    ORG_GOOGLE_LINK, ORG_GOOGLE_MAP, ORG_HELP,
+    ORG_GOOGLE_LINK, ORG_GOOGLE_MAP, ORG_GOOGLE_IMPORT, ORG_GOOGLE_SYNC,
+    ORG_GOOGLE_ADOPT, ORG_HELP,
 }
 
 # Participant reply keyboard labels
@@ -48,6 +52,8 @@ def organizer_main_menu() -> ReplyKeyboardMarkup:
             [KeyboardButton(text=ORG_INVITE), KeyboardButton(text=ORG_RESCHEDULE)],
             [KeyboardButton(text=ORG_CANCEL), KeyboardButton(text=ORG_CONFIRMATIONS)],
             [KeyboardButton(text=ORG_GOOGLE_LINK), KeyboardButton(text=ORG_GOOGLE_MAP)],
+            [KeyboardButton(text=ORG_GOOGLE_IMPORT), KeyboardButton(text=ORG_GOOGLE_SYNC)],
+            [KeyboardButton(text=ORG_GOOGLE_ADOPT)],
             [KeyboardButton(text=ORG_HELP)],
         ],
         resize_keyboard=True,
@@ -76,13 +82,20 @@ def event_range_keyboard(prefix: str) -> InlineKeyboardMarkup:
     )
 
 
-def google_calendars_keyboard(count: int) -> InlineKeyboardMarkup:
+def google_calendars_keyboard(count: int, prefix: str = "o_gcal_pick") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=f"Google calendar #{i + 1}", callback_data=f"o_gcal_pick:{i}")]
+            [InlineKeyboardButton(text=f"Google calendar #{i + 1}", callback_data=f"{prefix}:{i}")]
             for i in range(min(count, 10))
         ]
     )
+
+
+def confirm_google_adoption_keyboard(calendar_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="Notify Google attendees", callback_data=f"o_gadopt_yes:{calendar_id}"),
+        InlineKeyboardButton(text="Cancel", callback_data="o_gadopt_no"),
+    ]])
 
 
 def calendars_keyboard(calendars: list[Calendar], prefix: str) -> InlineKeyboardMarkup:

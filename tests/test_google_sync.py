@@ -4,15 +4,19 @@ import pytest
 from google.oauth2.credentials import Credentials
 
 from meetifier.config import Settings
-from meetifier.db import Calendar, Database, Event, GoogleAccount
+from sqlalchemy import select
+
+from meetifier.db import (Calendar, Database, Event, GoogleAccount, GoogleCalendarLink,
+                          GoogleEventAttendee, GoogleEventLink, GoogleEventState, NotificationJob)
 from meetifier.google_sync import (
     _credentials,
     _naive_utc,
     _persist_refreshed_tokens,
+    _upsert_google_event,
     event_to_google_body,
     google_enabled,
 )
-from meetifier.service import get_or_create_user
+from meetifier.service import create_calendar, get_or_create_user
 
 
 def test_event_to_google_body():
@@ -84,3 +88,80 @@ async def test_persist_refreshed_tokens_updates_account(db):
         assert stored.access_token == "new_at"
         assert stored.refresh_token == "new_rt"
         assert stored.token_expiry == datetime(2030, 1, 1, 12, 0)
+
+
+async def test_google_event_import_update_cancel_and_attendees(db):
+    async with db.sessions() as session:
+        calendar = await create_calendar(session, 1, "Work", "Europe/Moscow", "UTC")
+        link = GoogleCalendarLink(
+            calendar_id=calendar.id,
+            google_calendar_id="primary",
+            google_calendar_name="Work",
+        )
+        session.add(link)
+        await session.commit()
+        item = {
+            "id": "google-1",
+            "etag": "v1",
+            "summary": "Planning",
+            "description": "Agenda",
+            "status": "confirmed",
+            "start": {"dateTime": "2030-01-01T18:00:00+03:00"},
+            "end": {"dateTime": "2030-01-01T19:00:00+03:00"},
+            "recurringEventId": "series-1",
+            "originalStartTime": {"dateTime": "2030-01-01T18:00:00+03:00"},
+            "attendees": [{"email": "guest@example.com", "displayName": "Guest", "responseStatus": "accepted"}],
+        }
+        change = await _upsert_google_event(session, calendar, link, item)
+        await session.commit()
+        event = await session.scalar(select(Event))
+        mapping = await session.get(GoogleEventLink, event.id)
+        state = await session.get(GoogleEventState, event.id)
+        attendee = await session.scalar(select(GoogleEventAttendee))
+
+        assert change.action == "created"
+        assert event.start_utc == datetime(2030, 1, 1, 15, 0)
+        assert mapping.google_event_id == "google-1"
+        assert state.recurring_event_id == "series-1"
+        assert attendee.email == "guest@example.com"
+
+        item["etag"] = "v2"
+        item["start"] = {"dateTime": "2030-01-02T19:00:00+03:00"}
+        item["end"] = {"dateTime": "2030-01-02T20:00:00+03:00"}
+        change = await _upsert_google_event(session, calendar, link, item)
+        await session.commit()
+        assert change.action == "updated"
+        assert event.version == 2
+        assert event.start_utc == datetime(2030, 1, 2, 16, 0)
+
+        item = {"id": "google-1", "status": "cancelled"}
+        change = await _upsert_google_event(session, calendar, link, item)
+        await session.commit()
+        assert change.action == "cancelled"
+        assert event.status == "cancelled"
+
+
+async def test_google_event_import_is_idempotent(db):
+    async with db.sessions() as session:
+        calendar = await create_calendar(session, 1, "Work", "UTC", "UTC")
+        link = GoogleCalendarLink(calendar_id=calendar.id, google_calendar_id="primary", google_calendar_name="Work")
+        session.add(link)
+        await session.commit()
+        item = {
+            "id": "google-1",
+            "etag": "v1",
+            "summary": "Planning",
+            "status": "confirmed",
+            "start": {"dateTime": "2030-01-01T18:00:00Z"},
+            "end": {"dateTime": "2030-01-01T19:00:00Z"},
+        }
+        first = await _upsert_google_event(session, calendar, link, item)
+        second = await _upsert_google_event(session, calendar, link, item)
+        await session.commit()
+        events = list((await session.scalars(select(Event))).all())
+        jobs = list((await session.scalars(select(NotificationJob))).all())
+
+    assert first.action == "created"
+    assert second.action == "unchanged"
+    assert len(events) == 1
+    assert jobs == []

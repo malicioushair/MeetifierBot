@@ -21,6 +21,7 @@ class Settings:
     google_redirect_uri: str = ""
     oauth_host: str = "127.0.0.1"
     oauth_port: int = 8080
+    google_sync_interval_seconds: int = 60
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -38,6 +39,7 @@ class Settings:
             google_redirect_uri=os.getenv("GOOGLE_REDIRECT_URI", ""),
             oauth_host=os.getenv("OAUTH_HOST", "127.0.0.1"),
             oauth_port=int(os.getenv("OAUTH_PORT", "8080")),
+            google_sync_interval_seconds=int(os.getenv("GOOGLE_SYNC_INTERVAL_SECONDS", "60")),
         )
         missing = [name for name, value in (
             ("ORGANIZER_BOT_TOKEN", settings.organizer_bot_token),
@@ -56,4 +58,3 @@ def validate_timezone(value: str) -> str:
     except ZoneInfoNotFoundError as exc:
         raise ValueError(f"Unknown timezone: {value}") from exc
     return value
-

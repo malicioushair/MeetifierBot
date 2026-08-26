@@ -117,6 +117,34 @@ class GoogleEventLink(Base):
     google_calendar_id: Mapped[str] = mapped_column(String(256))
 
 
+class GoogleCalendarSync(Base):
+    __tablename__ = "google_calendar_syncs"
+    calendar_id: Mapped[int] = mapped_column(ForeignKey("calendars.id"), primary_key=True)
+    sync_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class GoogleEventState(Base):
+    __tablename__ = "google_event_states"
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), primary_key=True)
+    source: Mapped[str] = mapped_column(String(20), default="google")
+    etag: Mapped[str] = mapped_column(String(256), default="")
+    recurring_event_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    original_start: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    html_link: Mapped[str] = mapped_column(Text, default="")
+
+
+class GoogleEventAttendee(Base):
+    __tablename__ = "google_event_attendees"
+    __table_args__ = (UniqueConstraint("event_id", "email"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
+    email: Mapped[str] = mapped_column(String(320))
+    display_name: Mapped[str] = mapped_column(String(200), default="")
+    response_status: Mapped[str] = mapped_column(String(30), default="needsAction")
+
+
 class OAuthState(Base):
     __tablename__ = "oauth_states"
     state: Mapped[str] = mapped_column(String(64), primary_key=True)

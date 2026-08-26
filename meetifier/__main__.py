@@ -10,7 +10,7 @@ from .bots import build_organizer_router, build_participant_router, configure_co
 from .config import Settings
 from .db import Database
 from .oauth_server import run_oauth_server
-from .worker import run_worker
+from .worker import run_google_sync_worker, run_worker
 
 
 async def main() -> None:
@@ -30,6 +30,7 @@ async def main() -> None:
     ]
     if settings.google_client_id:
         tasks.append(run_oauth_server(settings, db, organizer))
+        tasks.append(run_google_sync_worker(db, settings, participant))
     try:
         await asyncio.gather(*tasks)
     finally:
