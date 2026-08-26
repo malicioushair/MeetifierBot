@@ -16,6 +16,11 @@ class Settings:
     default_timezone: str = "UTC"
     poll_timeout_seconds: int = 20
     worker_interval_seconds: int = 5
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = ""
+    oauth_host: str = "127.0.0.1"
+    oauth_port: int = 8080
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -28,6 +33,11 @@ class Settings:
             default_timezone=os.getenv("DEFAULT_TIMEZONE", "UTC"),
             poll_timeout_seconds=int(os.getenv("POLL_TIMEOUT_SECONDS", "20")),
             worker_interval_seconds=int(os.getenv("WORKER_INTERVAL_SECONDS", "5")),
+            google_client_id=os.getenv("GOOGLE_CLIENT_ID", ""),
+            google_client_secret=os.getenv("GOOGLE_CLIENT_SECRET", ""),
+            google_redirect_uri=os.getenv("GOOGLE_REDIRECT_URI", ""),
+            oauth_host=os.getenv("OAUTH_HOST", "127.0.0.1"),
+            oauth_port=int(os.getenv("OAUTH_PORT", "8080")),
         )
         missing = [name for name, value in (
             ("ORGANIZER_BOT_TOKEN", settings.organizer_bot_token),

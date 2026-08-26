@@ -83,9 +83,31 @@ python -m pytest -q
 
 The tests cover timezone conversion, weekly recurrence, job creation, reschedule invalidation, and unsubscribe cleanup. No Telegram tokens or network are needed.
 
+## Google Calendar (optional, one-way export)
+
+Organizers can mirror Meetifier events to Google Calendar. Participants still use Telegram only.
+
+1. Create a Google Cloud project, enable **Google Calendar API**, and create an **OAuth 2.0 Web client**.
+2. Add redirect URI: `http://127.0.0.1:8080/oauth/google/callback` (or your public URL in production).
+3. Set in `.env`:
+
+```env
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_REDIRECT_URI=http://127.0.0.1:8080/oauth/google/callback
+OAUTH_HOST=127.0.0.1
+OAUTH_PORT=8080
+```
+
+4. Restart the app. In **Organizer Bot**: tap **🔗 Link Google**, complete OAuth in the browser, then **📎 Map to Google** to link a Meetifier calendar to a Google calendar.
+5. New, rescheduled, and cancelled events in that Meetifier calendar are pushed to Google automatically.
+
+For Docker, expose port `8080` and set `GOOGLE_REDIRECT_URI` to your public HTTPS callback URL.
+
 ## MVP boundaries
 
 - Weekly recurrence is materialized up to 52 occurrences; editing a whole series is not yet included.
 - Immediate update messages are best-effort. Durable scheduled reminders are retried up to five times.
 - Database tables are auto-created; add Alembic migrations before evolving a production deployment.
-- Telegram long polling is used, so HTTPS/domain setup is unnecessary. Webhooks, Google/Outlook sync, private appointments, attendance, localization, and a web dashboard are later phases.
+- Telegram long polling is used, so HTTPS/domain setup is unnecessary for the bots themselves.
+- Google sync is one-way (Meetifier → Google). Two-way sync, Outlook, webhooks, and a web dashboard are later phases.

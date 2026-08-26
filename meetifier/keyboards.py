@@ -13,11 +13,14 @@ ORG_INVITE = "🔗 Invite"
 ORG_RESCHEDULE = "✏️ Reschedule"
 ORG_CANCEL = "❌ Cancel event"
 ORG_CONFIRMATIONS = "✅ Confirmations"
+ORG_GOOGLE_LINK = "🔗 Link Google"
+ORG_GOOGLE_MAP = "📎 Map to Google"
 ORG_HELP = "❓ Help"
 
 ORGANIZER_BUTTONS = {
     ORG_CALENDARS, ORG_NEW_CALENDAR, ORG_NEW_EVENT, ORG_EVENTS,
-    ORG_INVITE, ORG_RESCHEDULE, ORG_CANCEL, ORG_CONFIRMATIONS, ORG_HELP,
+    ORG_INVITE, ORG_RESCHEDULE, ORG_CANCEL, ORG_CONFIRMATIONS,
+    ORG_GOOGLE_LINK, ORG_GOOGLE_MAP, ORG_HELP,
 }
 
 # Participant reply keyboard labels
@@ -44,6 +47,7 @@ def organizer_main_menu() -> ReplyKeyboardMarkup:
             [KeyboardButton(text=ORG_NEW_EVENT), KeyboardButton(text=ORG_EVENTS)],
             [KeyboardButton(text=ORG_INVITE), KeyboardButton(text=ORG_RESCHEDULE)],
             [KeyboardButton(text=ORG_CANCEL), KeyboardButton(text=ORG_CONFIRMATIONS)],
+            [KeyboardButton(text=ORG_GOOGLE_LINK), KeyboardButton(text=ORG_GOOGLE_MAP)],
             [KeyboardButton(text=ORG_HELP)],
         ],
         resize_keyboard=True,
@@ -69,6 +73,15 @@ def event_range_keyboard(prefix: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="Next event", callback_data=f"{prefix}:next"),
             InlineKeyboardButton(text="This week", callback_data=f"{prefix}:week"),
         ]]
+    )
+
+
+def google_calendars_keyboard(count: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"Google calendar #{i + 1}", callback_data=f"o_gcal_pick:{i}")]
+            for i in range(min(count, 10))
+        ]
     )
 
 

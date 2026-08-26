@@ -8,12 +8,14 @@ from sqlalchemy import select
 
 from .config import Settings
 from .db import Calendar, Database, Event, Subscription, User, utcnow
-from .keyboards import (ORGANIZER_BUTTONS, ORG_CALENDARS, ORG_CANCEL, ORG_CONFIRMATIONS, ORG_EVENTS, ORG_HELP,
-                        ORG_INVITE, ORG_NEW_CALENDAR, ORG_NEW_EVENT, ORG_RESCHEDULE, PARTICIPANT_BUTTONS, PAR_CONFIRM,
-                        PAR_HELP, PAR_MUTE, PAR_REMINDERS, PAR_SUBSCRIPTIONS, PAR_TIMEZONE, PAR_UNMUTE, PAR_UNSUBSCRIBE,
-                        PAR_UPCOMING, calendars_keyboard, confirm_cancel_keyboard, event_confirm_keyboard,
-                        event_range_keyboard, events_keyboard, organizer_main_menu, participant_main_menu,
-                        upcoming_confirm_keyboard)
+from .keyboards import (ORGANIZER_BUTTONS, ORG_CALENDARS, ORG_CANCEL, ORG_CONFIRMATIONS, ORG_EVENTS, ORG_GOOGLE_LINK,
+                        ORG_GOOGLE_MAP, ORG_HELP, ORG_INVITE, ORG_NEW_CALENDAR, ORG_NEW_EVENT, ORG_RESCHEDULE,
+                        PARTICIPANT_BUTTONS, PAR_CONFIRM, PAR_HELP, PAR_MUTE, PAR_REMINDERS, PAR_SUBSCRIPTIONS,
+                        PAR_TIMEZONE, PAR_UNMUTE, PAR_UNSUBSCRIBE, PAR_UPCOMING, calendars_keyboard,
+                        confirm_cancel_keyboard, event_confirm_keyboard, event_range_keyboard, events_keyboard,
+                        google_calendars_keyboard, organizer_main_menu, participant_main_menu, upcoming_confirm_keyboard)
+from .google_sync import (authorization_url, create_oauth_state, get_google_account, google_enabled,
+                          link_google_calendar, list_google_calendars, sync_changed_event, sync_created_events)
 from .service import (calendar_events, change_event, confirm_event, confirmations_for_event, create_calendar,
                       create_events, display_time, invitation_calendar, make_invitation, set_reminders,
                       set_subscription_state, set_timezone, subscribe, upcoming_for_user_with_status)
@@ -30,6 +32,8 @@ ORGANIZER_HELP = """Use the menu buttons below, or type commands directly:
 /reschedule EVENT_ID | 2026-09-02 19:00
 /cancel EVENT_ID
 /confirmations CALENDAR_ID
+
+Google (optional): Link Google, then Map to Google to mirror new/rescheduled/cancelled events.
 
 Use WEEKS=1 for one-time events or 2..52 for weekly recurrence."""
 
@@ -99,6 +103,20 @@ def format_participant_events(rows: list[tuple[Event, Calendar, bool]], timezone
     return "\n".join(lines)
 
 
+async def mirror_created_events(db: Database, settings: Settings, calendar_id: int, events: list[Event]) -> None:
+    async with db.sessions() as session:
+        calendar = await session.get(Calendar, calendar_id)
+    if calendar:
+        await sync_created_events(db, settings, calendar, events)
+
+
+async def mirror_changed_event(db: Database, settings: Settings, event: Event, *, cancelled: bool = False) -> None:
+    async with db.sessions() as session:
+        calendar = await session.get(Calendar, event.calendar_id)
+    if calendar:
+        await sync_changed_event(db, settings, event, calendar, cancelled=cancelled)
+
+
 def build_organizer_router(db: Database, settings: Settings, participant_bot: Bot) -> Router:
     router = Router(name="organizer")
 
@@ -120,6 +138,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                     event = await change_event(session, message.from_user.id, int(command.args.strip()), cancel=True)
                     calendar = await session.get(Calendar, event.calendar_id)
                     await notify_subscribers(session, participant_bot, calendar, [event], "Event cancelled")
+                await mirror_changed_event(db, settings, event, cancelled=True)
                 await message.answer("Event cancelled and subscribers notified.", reply_markup=organizer_main_menu())
             except (ValueError, PermissionError) as exc:
                 await message.answer(f"Error: {exc}", reply_markup=organizer_main_menu())
@@ -243,6 +262,80 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         await callback.message.edit_text(format_organizer_events(rows, calendar, range_mode))
         await callback.answer()
 
+    @router.message(F.text == ORG_GOOGLE_LINK)
+    async def google_link_start(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        if not google_enabled(settings):
+            await message.answer("Google sync is not configured on this server.", reply_markup=organizer_main_menu())
+            return
+        async with db.sessions() as session:
+            token = await create_oauth_state(session, message.from_user.id)
+        await message.answer(
+            f"Open this link to connect Google Calendar:\n{authorization_url(settings, token)}",
+            reply_markup=organizer_main_menu(),
+        )
+
+    @router.message(F.text == ORG_GOOGLE_MAP)
+    async def google_map_start(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        if not google_enabled(settings):
+            await message.answer("Google sync is not configured on this server.", reply_markup=organizer_main_menu())
+            return
+        async with db.sessions() as session:
+            account = await get_google_account(session, message.from_user.id)
+        if not account:
+            await message.answer("Link Google first using 🔗 Link Google.", reply_markup=organizer_main_menu())
+            return
+        await pick_calendar(message, "o_gmap_cal", "Choose a Meetifier calendar to map:")
+
+    @router.callback_query(F.data.startswith("o_gmap_cal:"))
+    async def google_map_pick_calendar(callback: CallbackQuery, state: FSMContext) -> None:
+        calendar_id = int(callback.data.split(":", 1)[1])
+        async with db.sessions() as session:
+            account = await get_google_account(session, callback.from_user.id)
+            if not account:
+                await callback.message.edit_text("Link Google first using 🔗 Link Google.")
+                await callback.answer()
+                return
+            try:
+                google_cals = await list_google_calendars(session, settings, account)
+            except Exception as exc:
+                await callback.message.edit_text(f"Could not load Google calendars: {exc}")
+                await callback.answer()
+                return
+        if not google_cals:
+            await callback.message.edit_text("No Google calendars found.")
+            await callback.answer()
+            return
+        await state.update_data(meetifier_calendar_id=calendar_id, google_calendars=google_cals)
+        await callback.message.edit_text(
+            "Choose a Google calendar:",
+            reply_markup=google_calendars_keyboard(len(google_cals)),
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("o_gcal_pick:"))
+    async def google_map_pick_google_cal(callback: CallbackQuery, state: FSMContext) -> None:
+        index = int(callback.data.split(":", 1)[1])
+        data = await state.get_data()
+        calendars_list = data.get("google_calendars") or []
+        calendar_id = data.get("meetifier_calendar_id")
+        if calendar_id is None or index >= len(calendars_list):
+            await callback.message.edit_text("Selection expired. Start again with 📎 Map to Google.")
+            await callback.answer()
+            return
+        chosen = calendars_list[index]
+        try:
+            async with db.sessions() as session:
+                await link_google_calendar(
+                    session, callback.from_user.id, int(calendar_id),
+                    chosen["id"], chosen["name"])
+            await callback.message.edit_text(f"Mapped to Google calendar: {chosen['name']}")
+        except (ValueError, PermissionError) as exc:
+            await callback.message.edit_text(f"Error: {exc}")
+        await state.clear()
+        await callback.answer()
+
     @router.message(Command("invite"))
     @router.message(F.text == ORG_INVITE)
     async def invite_start(message: Message, state: FSMContext, command: CommandObject | None = None) -> None:
@@ -287,6 +380,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                         session, message.from_user.id, int(calendar_id), title, start, int(duration), weeks)
                     calendar = await session.get(Calendar, int(calendar_id))
                     await notify_subscribers(session, participant_bot, calendar, events, "New event")
+                await mirror_created_events(db, settings, int(calendar_id), events)
                 await message.answer(
                     f"Created {len(events)} event(s). IDs: {', '.join(str(e.id) for e in events)}",
                     reply_markup=organizer_main_menu(),
@@ -334,6 +428,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                     data["start"], int(data["duration"]), weeks)
                 calendar = await session.get(Calendar, data["calendar_id"])
                 await notify_subscribers(session, participant_bot, calendar, events, "New event")
+            await mirror_created_events(db, settings, data["calendar_id"], events)
             await message.answer(
                 f"Created {len(events)} event(s). IDs: {', '.join(str(e.id) for e in events)}",
                 reply_markup=organizer_main_menu(),
@@ -353,6 +448,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                     event = await change_event(session, message.from_user.id, int(event_id), new_start)
                     calendar = await session.get(Calendar, event.calendar_id)
                     await notify_subscribers(session, participant_bot, calendar, [event], "Event rescheduled")
+                await mirror_changed_event(db, settings, event)
                 await message.answer("Event rescheduled and subscribers notified.", reply_markup=organizer_main_menu())
             except (ValueError, PermissionError) as exc:
                 await message.answer(f"Error: {exc}", reply_markup=organizer_main_menu())
@@ -389,6 +485,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 event = await change_event(session, message.from_user.id, data["event_id"], message.text.strip())
                 calendar = await session.get(Calendar, event.calendar_id)
                 await notify_subscribers(session, participant_bot, calendar, [event], "Event rescheduled")
+            await mirror_changed_event(db, settings, event)
             await message.answer("Event rescheduled and subscribers notified.", reply_markup=organizer_main_menu())
         except (ValueError, PermissionError) as exc:
             await message.answer(f"Error: {exc}", reply_markup=organizer_main_menu())
@@ -425,6 +522,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 event = await change_event(session, callback.from_user.id, event_id, cancel=True)
                 calendar = await session.get(Calendar, event.calendar_id)
                 await notify_subscribers(session, participant_bot, calendar, [event], "Event cancelled")
+            await mirror_changed_event(db, settings, event, cancelled=True)
             await callback.message.edit_text("Event cancelled and subscribers notified.")
         except (ValueError, PermissionError) as exc:
             await callback.message.edit_text(f"Error: {exc}")

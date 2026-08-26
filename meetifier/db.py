@@ -93,6 +93,37 @@ class NotificationJob(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class GoogleAccount(Base):
+    __tablename__ = "google_accounts"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), default="")
+    refresh_token: Mapped[str] = mapped_column(Text)
+    access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    token_expiry: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    linked_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class GoogleCalendarLink(Base):
+    __tablename__ = "google_calendar_links"
+    calendar_id: Mapped[int] = mapped_column(ForeignKey("calendars.id"), primary_key=True)
+    google_calendar_id: Mapped[str] = mapped_column(String(256))
+    google_calendar_name: Mapped[str] = mapped_column(String(200), default="")
+
+
+class GoogleEventLink(Base):
+    __tablename__ = "google_event_links"
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), primary_key=True)
+    google_event_id: Mapped[str] = mapped_column(String(256))
+    google_calendar_id: Mapped[str] = mapped_column(String(256))
+
+
+class OAuthState(Base):
+    __tablename__ = "oauth_states"
+    state: Mapped[str] = mapped_column(String(64), primary_key=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Database:
     def __init__(self, url: str):
         self.engine: AsyncEngine = create_async_engine(url)
