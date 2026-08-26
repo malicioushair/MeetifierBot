@@ -9,10 +9,12 @@ from sqlalchemy import select
 from .config import Settings
 from .db import Calendar, Database, Event, GoogleCalendarLink, Subscription, User, utcnow
 from .i18n import LOCALES, normalize_locale, t
-from .keyboards import (ORGANIZER_BUTTONS, PARTICIPANT_BUTTONS, calendars_keyboard, confirm_cancel_keyboard,
-                        confirm_google_adoption_keyboard, event_confirm_keyboard, event_range_keyboard,
-                        events_keyboard, google_calendars_keyboard, locale_keyboard, org_texts,
-                        organizer_main_menu, par_texts, participant_main_menu, upcoming_confirm_keyboard)
+from .keyboards import (FLOW_BACK_DATA, FLOW_CANCEL_DATA, ORG_INPUT_BLOCKLIST, PAR_INPUT_BLOCKLIST,
+                        calendars_keyboard, confirm_cancel_keyboard, confirm_google_adoption_keyboard,
+                        event_confirm_keyboard, event_range_keyboard, events_keyboard, flow_nav_keyboard,
+                        google_calendars_keyboard, locale_keyboard, nav_texts, org_texts, organizer_main_menu,
+                        par_texts, participant_main_menu, upcoming_confirm_keyboard)
+from .flow import discard_flow
 from .google_sync import (adopt_google_calendar, authorization_url, create_oauth_state, get_google_account,
                           google_enabled, import_google_calendar, link_google_calendar, list_google_calendars,
                           sync_changed_event, sync_created_events, sync_google_calendar)
@@ -20,8 +22,11 @@ from .service import (calendar_events, change_event, confirm_event, confirmation
                       create_events, display_time, get_user_locale, invitation_calendar, make_invitation,
                       set_locale, set_reminders, set_subscription_state, set_timezone, subscribe,
                       upcoming_for_user_with_status)
-from .states import (OrganizerNewCalendar, OrganizerNewEvent, OrganizerReschedule, ParticipantReminders,
-                     ParticipantTimezone)
+from .states import (OrganizerCancelEvent, OrganizerConfirmations, OrganizerEvents, OrganizerGoogleAdopt,
+                     OrganizerGoogleImport, OrganizerGoogleMap, OrganizerGoogleSync, OrganizerInvite,
+                     OrganizerNewCalendar, OrganizerNewEvent, OrganizerReschedule, ParticipantConfirmPick,
+                     ParticipantMute, ParticipantReminders, ParticipantTimezone, ParticipantUnmute,
+                     ParticipantUnsubscribe, ParticipantUpcoming)
 
 
 def participant_display_name(user) -> str:
@@ -117,6 +122,37 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
     async def err(message: Message, locale: str, exc: Exception) -> None:
         await message.answer(t(locale, "error", error=exc), reply_markup=organizer_main_menu(locale))
 
+    async def restore_menu(target: Message | CallbackQuery, locale: str, text: str | None = None) -> None:
+        msg = target.message if isinstance(target, CallbackQuery) else target
+        await msg.answer(text or t(locale, "main_menu"), reply_markup=organizer_main_menu(locale))
+
+    async def prompt_text(target: Message | CallbackQuery, text: str, locale: str) -> None:
+        if isinstance(target, CallbackQuery):
+            try:
+                await target.message.edit_text(text)
+            except Exception:
+                await target.message.answer(text, reply_markup=flow_nav_keyboard(locale))
+            else:
+                await target.message.answer("\u2060", reply_markup=flow_nav_keyboard(locale))
+            await target.answer()
+        else:
+            await target.answer(text, reply_markup=flow_nav_keyboard(locale))
+
+    async def prompt_inline(
+        target: Message | CallbackQuery, text: str, markup, locale: str, *, with_reply_nav: bool = False,
+    ) -> None:
+        if isinstance(target, CallbackQuery):
+            try:
+                await target.message.edit_text(text, reply_markup=markup)
+            except Exception:
+                await target.message.answer(text, reply_markup=markup)
+            if with_reply_nav:
+                await target.message.answer("\u2060", reply_markup=flow_nav_keyboard(locale))
+            await target.answer()
+        else:
+            await target.answer(text, reply_markup=markup)
+            await target.answer("\u2060", reply_markup=flow_nav_keyboard(locale))
+
     @router.message(CommandStart())
     async def start_handler(message: Message) -> None:
         locale = await locale_for(message.from_user.id)
@@ -161,10 +197,182 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 await err(message, locale, exc)
             return
         if await state.get_state():
-            await state.clear()
-            await message.answer(t(locale, "cancelled"), reply_markup=organizer_main_menu(locale))
+            await discard_flow(message, state, locale, role="org")
             return
         await message.answer(t(locale, "nothing_to_cancel_event"))
+
+    @router.message(F.text.in_(nav_texts("cancel")))
+    async def org_cancel_btn(message: Message, state: FSMContext) -> None:
+        locale = await locale_for(message.from_user.id)
+        if await state.get_state():
+            await discard_flow(message, state, locale, role="org")
+        else:
+            await message.answer(t(locale, "nothing_to_cancel"), reply_markup=organizer_main_menu(locale))
+
+    @router.callback_query(F.data == FLOW_CANCEL_DATA)
+    async def org_cancel_cb(callback: CallbackQuery, state: FSMContext) -> None:
+        locale = await locale_for(callback.from_user.id)
+        if await state.get_state():
+            await discard_flow(callback, state, locale, role="org")
+        else:
+            await callback.answer(t(locale, "nothing_to_cancel"), show_alert=True)
+
+    async def org_flow_back(target: Message | CallbackQuery, state: FSMContext) -> None:
+        locale = await locale_for(target.from_user.id)
+        current = await state.get_state()
+        data = await state.get_data()
+        uid = target.from_user.id
+
+        if not current:
+            if isinstance(target, CallbackQuery):
+                await target.answer(t(locale, "nothing_to_cancel"), show_alert=True)
+            else:
+                await target.answer(t(locale, "nothing_to_cancel"), reply_markup=organizer_main_menu(locale))
+            return
+
+        async def cancel() -> None:
+            await discard_flow(target, state, locale, role="org")
+
+        if current == OrganizerNewCalendar.name.state:
+            await cancel()
+        elif current == OrganizerNewCalendar.timezone.state:
+            await state.set_state(OrganizerNewCalendar.name)
+            await state.update_data(name=None)
+            await prompt_text(target, t(locale, "enter_calendar_name"), locale)
+        elif current == OrganizerNewEvent.calendar.state:
+            await cancel()
+        elif current == OrganizerNewEvent.title.state:
+            await state.set_state(OrganizerNewEvent.calendar)
+            await state.update_data(calendar_id=None, title=None)
+            async with db.sessions() as session:
+                rows = await fetch_owned_calendars(session, uid)
+            await prompt_inline(
+                target, t(locale, "choose_calendar_event"),
+                calendars_keyboard(rows, "o_newevent", locale, show_back=False),
+                locale, with_reply_nav=isinstance(target, Message),
+            )
+        elif current == OrganizerNewEvent.start.state:
+            await state.set_state(OrganizerNewEvent.title)
+            await state.update_data(start=None)
+            await prompt_text(target, t(locale, "enter_event_title"), locale)
+        elif current == OrganizerNewEvent.duration.state:
+            await state.set_state(OrganizerNewEvent.start)
+            await state.update_data(duration=None)
+            await prompt_text(target, t(locale, "enter_start_time"), locale)
+        elif current == OrganizerNewEvent.weeks.state:
+            await state.set_state(OrganizerNewEvent.duration)
+            await state.update_data(weeks=None)
+            await prompt_text(target, t(locale, "enter_duration"), locale)
+        elif current == OrganizerReschedule.calendar.state:
+            await cancel()
+        elif current == OrganizerReschedule.event.state:
+            await state.set_state(OrganizerReschedule.calendar)
+            await state.update_data(calendar_id=None)
+            async with db.sessions() as session:
+                rows = await fetch_owned_calendars(session, uid)
+            await prompt_inline(
+                target, t(locale, "choose_calendar_reschedule"),
+                calendars_keyboard(rows, "o_resched", locale, show_back=False),
+                locale, with_reply_nav=isinstance(target, Message),
+            )
+        elif current == OrganizerReschedule.new_start.state:
+            calendar_id = data.get("calendar_id")
+            await state.set_state(OrganizerReschedule.event)
+            await state.update_data(event_id=None)
+            async with db.sessions() as session:
+                rows = await fetch_future_events(session, int(calendar_id))
+            await prompt_inline(
+                target, t(locale, "choose_event"),
+                events_keyboard(rows, "o_resched_evt", locale),
+                locale, with_reply_nav=isinstance(target, Message),
+            )
+        elif current == OrganizerCancelEvent.calendar.state:
+            await cancel()
+        elif current == OrganizerCancelEvent.event.state:
+            await state.set_state(OrganizerCancelEvent.calendar)
+            await state.update_data(calendar_id=None)
+            async with db.sessions() as session:
+                rows = await fetch_owned_calendars(session, uid)
+            await prompt_inline(
+                target, t(locale, "choose_calendar"),
+                calendars_keyboard(rows, "o_cancel", locale, show_back=False),
+                locale, with_reply_nav=isinstance(target, Message),
+            )
+        elif current == OrganizerCancelEvent.confirm.state:
+            calendar_id = data.get("calendar_id")
+            await state.set_state(OrganizerCancelEvent.event)
+            await state.update_data(event_id=None)
+            async with db.sessions() as session:
+                rows = await fetch_future_events(session, int(calendar_id))
+            await prompt_inline(
+                target, t(locale, "choose_event_cancel"),
+                events_keyboard(rows, "o_cancel_evt", locale),
+                locale, with_reply_nav=isinstance(target, Message),
+            )
+        elif current == OrganizerInvite.calendar.state:
+            await cancel()
+        elif current == OrganizerEvents.range_pick.state:
+            await cancel()
+        elif current == OrganizerEvents.calendar.state:
+            await state.set_state(OrganizerEvents.range_pick)
+            await state.update_data(range_mode=None)
+            await prompt_inline(
+                target, t(locale, "what_to_see"),
+                event_range_keyboard("o_evt_rng", locale),
+                locale, with_reply_nav=isinstance(target, Message),
+            )
+        elif current == OrganizerConfirmations.calendar.state:
+            await cancel()
+        elif current == OrganizerConfirmations.event.state:
+            await state.set_state(OrganizerConfirmations.calendar)
+            await state.update_data(calendar_id=None)
+            async with db.sessions() as session:
+                rows = await fetch_owned_calendars(session, uid)
+            await prompt_inline(
+                target, t(locale, "choose_calendar_confirmations"),
+                calendars_keyboard(rows, "o_conf_cal", locale, show_back=False),
+                locale, with_reply_nav=isinstance(target, Message),
+            )
+        elif current == OrganizerGoogleMap.calendar.state:
+            await cancel()
+        elif current == OrganizerGoogleMap.google_cal.state:
+            await state.set_state(OrganizerGoogleMap.calendar)
+            await state.update_data(meetifier_calendar_id=None, google_calendars=None)
+            async with db.sessions() as session:
+                rows = await fetch_owned_calendars(session, uid)
+            await prompt_inline(
+                target, t(locale, "choose_calendar_map"),
+                calendars_keyboard(rows, "o_gmap_cal", locale, show_back=False),
+                locale, with_reply_nav=isinstance(target, Message),
+            )
+        elif current == OrganizerGoogleImport.google_cal.state:
+            await cancel()
+        elif current == OrganizerGoogleSync.calendar.state:
+            await cancel()
+        elif current == OrganizerGoogleAdopt.calendar.state:
+            await cancel()
+        elif current == OrganizerGoogleAdopt.confirm.state:
+            calendars = await fetch_linked_calendars(uid)
+            if len(calendars) > 1:
+                await state.set_state(OrganizerGoogleAdopt.calendar)
+                await state.update_data(calendar_id=None)
+                await prompt_inline(
+                    target, t(locale, "choose_calendar_adopt"),
+                    calendars_keyboard(calendars, "o_gadopt", locale, show_back=False),
+                    locale, with_reply_nav=isinstance(target, Message),
+                )
+            else:
+                await cancel()
+        else:
+            await cancel()
+
+    @router.message(F.text.in_(nav_texts("back")))
+    async def org_back_btn(message: Message, state: FSMContext) -> None:
+        await org_flow_back(message, state)
+
+    @router.callback_query(F.data == FLOW_BACK_DATA)
+    async def org_back_cb(callback: CallbackQuery, state: FSMContext) -> None:
+        await org_flow_back(callback, state)
 
     async def reply_calendars(message: Message, locale: str) -> None:
         async with db.sessions() as session:
@@ -199,16 +407,16 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             return
         await state.clear()
         await state.set_state(OrganizerNewCalendar.name)
-        await message.answer(t(locale, "enter_calendar_name"), reply_markup=organizer_main_menu(locale))
+        await message.answer(t(locale, "enter_calendar_name"), reply_markup=flow_nav_keyboard(locale))
 
-    @router.message(OrganizerNewCalendar.name, ~F.text.in_(ORGANIZER_BUTTONS))
+    @router.message(OrganizerNewCalendar.name, ~F.text.in_(ORG_INPUT_BLOCKLIST))
     async def new_calendar_name(message: Message, state: FSMContext) -> None:
         await state.update_data(name=message.text.strip())
         await state.set_state(OrganizerNewCalendar.timezone)
         locale = await locale_for(message.from_user.id)
-        await message.answer(t(locale, "enter_timezone"))
+        await message.answer(t(locale, "enter_timezone"), reply_markup=flow_nav_keyboard(locale))
 
-    @router.message(OrganizerNewCalendar.timezone, ~F.text.in_(ORGANIZER_BUTTONS))
+    @router.message(OrganizerNewCalendar.timezone, ~F.text.in_(ORG_INPUT_BLOCKLIST))
     async def new_calendar_timezone(message: Message, state: FSMContext) -> None:
         data = await state.get_data()
         locale = await locale_for(message.from_user.id)
@@ -224,13 +432,20 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             await err(message, locale, exc)
         await state.clear()
 
-    async def pick_calendar(message: Message, prefix: str, prompt_key: str, locale: str) -> None:
+    async def pick_calendar(
+        message: Message, prefix: str, prompt_key: str, locale: str, *, show_back: bool = False,
+    ) -> bool:
         async with db.sessions() as session:
             rows = await fetch_owned_calendars(session, message.from_user.id)
         if not rows:
             await message.answer(t(locale, "no_calendars_create"), reply_markup=organizer_main_menu(locale))
-            return
-        await message.answer(t(locale, prompt_key), reply_markup=calendars_keyboard(rows, prefix))
+            return False
+        await prompt_inline(
+            message, t(locale, prompt_key),
+            calendars_keyboard(rows, prefix, locale, show_back=show_back),
+            locale, with_reply_nav=True,
+        )
+        return True
 
     @router.message(Command("events"))
     @router.message(F.text.in_(org_texts("events")))
@@ -257,38 +472,49 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             except (ValueError, PermissionError) as exc:
                 await err(message, locale, exc)
             return
-        await message.answer(t(locale, "what_to_see"), reply_markup=event_range_keyboard("o_evt_rng", locale))
+        await state.set_state(OrganizerEvents.range_pick)
+        await prompt_inline(
+            message, t(locale, "what_to_see"), event_range_keyboard("o_evt_rng", locale), locale, with_reply_nav=True,
+        )
 
     @router.callback_query(F.data.startswith("o_evt_rng:"))
-    async def events_range_pick(callback: CallbackQuery) -> None:
+    async def events_range_pick(callback: CallbackQuery, state: FSMContext) -> None:
         range_mode = callback.data.split(":", 1)[1]
         locale = await locale_for(callback.from_user.id)
+        await state.update_data(range_mode=range_mode)
         async with db.sessions() as session:
             rows = await fetch_owned_calendars(session, callback.from_user.id)
             if not rows:
+                await state.clear()
                 await callback.message.edit_text(t(locale, "no_calendars_create"))
+                await restore_menu(callback, locale)
                 await callback.answer()
                 return
             if len(rows) == 1:
                 calendar = rows[0]
                 events = await calendar_events(session, calendar.id, range_mode, calendar.timezone)
+                await state.clear()
                 await callback.message.edit_text(format_organizer_events(events, calendar, range_mode, locale))
+                await restore_menu(callback, locale)
                 await callback.answer()
                 return
+        await state.set_state(OrganizerEvents.calendar)
         await callback.message.edit_text(
             t(locale, "choose_calendar"),
-            reply_markup=calendars_keyboard(rows, f"o_evt_cal:{range_mode}"),
+            reply_markup=calendars_keyboard(rows, f"o_evt_cal:{range_mode}", locale),
         )
         await callback.answer()
 
     @router.callback_query(F.data.startswith("o_evt_cal:"))
-    async def events_calendar_pick(callback: CallbackQuery) -> None:
+    async def events_calendar_pick(callback: CallbackQuery, state: FSMContext) -> None:
         _, range_mode, calendar_id = callback.data.split(":", 2)
         locale = await locale_for(callback.from_user.id)
         async with db.sessions() as session:
             calendar = await session.get(Calendar, int(calendar_id))
             rows = await calendar_events(session, calendar.id, range_mode, calendar.timezone)
+        await state.clear()
         await callback.message.edit_text(format_organizer_events(rows, calendar, range_mode, locale))
+        await restore_menu(callback, locale)
         await callback.answer()
 
     @router.message(F.text.in_(org_texts("google_link")))
@@ -317,6 +543,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         if not account:
             await message.answer(t(locale, "google_link_first"), reply_markup=organizer_main_menu(locale))
             return
+        await state.set_state(OrganizerGoogleMap.calendar)
         await pick_calendar(message, "o_gmap_cal", "choose_calendar_map", locale)
 
     @router.callback_query(F.data.startswith("o_gmap_cal:"))
@@ -326,20 +553,27 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         async with db.sessions() as session:
             account = await get_google_account(session, callback.from_user.id)
             if not account:
+                await state.clear()
                 await callback.message.edit_text(t(locale, "google_link_first"))
+                await restore_menu(callback, locale)
                 await callback.answer()
                 return
             try:
                 google_cals = await list_google_calendars(session, settings, account)
             except Exception as exc:
+                await state.clear()
                 await callback.message.edit_text(t(locale, "google_load_failed", error=exc))
+                await restore_menu(callback, locale)
                 await callback.answer()
                 return
         if not google_cals:
+            await state.clear()
             await callback.message.edit_text(t(locale, "google_none_found"))
+            await restore_menu(callback, locale)
             await callback.answer()
             return
         await state.update_data(meetifier_calendar_id=calendar_id, google_calendars=google_cals)
+        await state.set_state(OrganizerGoogleMap.google_cal)
         await callback.message.edit_text(
             t(locale, "google_choose"),
             reply_markup=google_calendars_keyboard(len(google_cals), locale),
@@ -354,7 +588,9 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         calendars_list = data.get("google_calendars") or []
         calendar_id = data.get("meetifier_calendar_id")
         if calendar_id is None or index >= len(calendars_list):
+            await state.clear()
             await callback.message.edit_text(t(locale, "google_map_expired"))
+            await restore_menu(callback, locale)
             await callback.answer()
             return
         chosen = calendars_list[index]
@@ -369,6 +605,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         except Exception as exc:
             await callback.message.edit_text(t(locale, "error", error=exc))
         await state.clear()
+        await restore_menu(callback, locale)
         await callback.answer()
 
     @router.message(Command("googleimport"))
@@ -394,10 +631,12 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             await message.answer(t(locale, "google_none_writable"), reply_markup=organizer_main_menu(locale))
             return
         await state.update_data(google_import_calendars=google_cals)
+        await state.set_state(OrganizerGoogleImport.google_cal)
         names = "\n".join(f"{i + 1}. {calendar['name']}" for i, calendar in enumerate(google_cals[:10]))
-        await message.answer(
-            t(locale, "google_choose_import", names=names),
-            reply_markup=google_calendars_keyboard(len(google_cals), locale, "o_gimport_pick"),
+        await prompt_inline(
+            message, t(locale, "google_choose_import", names=names),
+            google_calendars_keyboard(len(google_cals), locale, "o_gimport_pick", show_back=False),
+            locale, with_reply_nav=True,
         )
 
     @router.callback_query(F.data.startswith("o_gimport_pick:"))
@@ -407,7 +646,9 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         locale = await locale_for(callback.from_user.id)
         google_cals = data.get("google_import_calendars") or []
         if index >= len(google_cals):
+            await state.clear()
             await callback.message.edit_text(t(locale, "google_import_expired"))
+            await restore_menu(callback, locale)
             await callback.answer()
             return
         chosen = google_cals[index]
@@ -421,6 +662,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         except Exception as exc:
             await callback.message.edit_text(t(locale, "google_import_failed", error=exc))
         await state.clear()
+        await restore_menu(callback, locale)
         await callback.answer()
 
     async def fetch_linked_calendars(telegram_id: int) -> list[Calendar]:
@@ -450,11 +692,15 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 await message.answer(
                     t(locale, "google_sync_failed", error=exc), reply_markup=organizer_main_menu(locale))
             return
-        await message.answer(
-            t(locale, "choose_calendar_sync"), reply_markup=calendars_keyboard(calendars, "o_gsync"))
+        await state.set_state(OrganizerGoogleSync.calendar)
+        await prompt_inline(
+            message, t(locale, "choose_calendar_sync"),
+            calendars_keyboard(calendars, "o_gsync", locale, show_back=False),
+            locale, with_reply_nav=True,
+        )
 
     @router.callback_query(F.data.startswith("o_gsync:"))
-    async def google_sync_pick(callback: CallbackQuery) -> None:
+    async def google_sync_pick(callback: CallbackQuery, state: FSMContext) -> None:
         calendar_id = int(callback.data.split(":", 1)[1])
         locale = await locale_for(callback.from_user.id)
         owned = {calendar.id for calendar in await fetch_linked_calendars(callback.from_user.id)}
@@ -468,6 +714,8 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                       cancelled=result.cancelled))
             except Exception as exc:
                 await callback.message.edit_text(t(locale, "google_sync_failed", error=exc))
+        await state.clear()
+        await restore_menu(callback, locale)
         await callback.answer()
 
     @router.message(Command("googleinvite"))
@@ -481,25 +729,34 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             return
         if len(calendars) == 1:
             calendar = calendars[0]
-            await message.answer(
-                t(locale, "google_adopt_confirm", name=calendar.name),
-                reply_markup=confirm_google_adoption_keyboard(calendar.id, locale),
+            await state.set_state(OrganizerGoogleAdopt.confirm)
+            await state.update_data(calendar_id=calendar.id)
+            await prompt_inline(
+                message, t(locale, "google_adopt_confirm", name=calendar.name),
+                confirm_google_adoption_keyboard(calendar.id, locale),
+                locale, with_reply_nav=True,
             )
             return
-        await message.answer(
-            t(locale, "choose_calendar_adopt"),
-            reply_markup=calendars_keyboard(calendars, "o_gadopt"),
+        await state.set_state(OrganizerGoogleAdopt.calendar)
+        await prompt_inline(
+            message, t(locale, "choose_calendar_adopt"),
+            calendars_keyboard(calendars, "o_gadopt", locale, show_back=False),
+            locale, with_reply_nav=True,
         )
 
     @router.callback_query(F.data.startswith("o_gadopt:"))
-    async def google_adopt_pick(callback: CallbackQuery) -> None:
+    async def google_adopt_pick(callback: CallbackQuery, state: FSMContext) -> None:
         calendar_id = int(callback.data.split(":", 1)[1])
         locale = await locale_for(callback.from_user.id)
         owned = {calendar.id: calendar for calendar in await fetch_linked_calendars(callback.from_user.id)}
         calendar = owned.get(calendar_id)
         if not calendar:
+            await state.clear()
             await callback.message.edit_text(t(locale, "calendar_not_owned"))
+            await restore_menu(callback, locale)
         else:
+            await state.set_state(OrganizerGoogleAdopt.confirm)
+            await state.update_data(calendar_id=calendar_id)
             await callback.message.edit_text(
                 t(locale, "google_adopt_confirm_short", name=calendar.name),
                 reply_markup=confirm_google_adoption_keyboard(calendar_id, locale),
@@ -507,7 +764,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         await callback.answer()
 
     @router.callback_query(F.data.startswith("o_gadopt_yes:"))
-    async def google_adopt_confirm(callback: CallbackQuery) -> None:
+    async def google_adopt_confirm(callback: CallbackQuery, state: FSMContext) -> None:
         calendar_id = int(callback.data.split(":", 1)[1])
         locale = await locale_for(callback.from_user.id)
         try:
@@ -518,13 +775,14 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             )
         except Exception as exc:
             await callback.message.edit_text(t(locale, "google_adopt_failed", error=exc))
+        await state.clear()
+        await restore_menu(callback, locale)
         await callback.answer()
 
     @router.callback_query(F.data == "o_gadopt_no")
-    async def google_adopt_cancel(callback: CallbackQuery) -> None:
+    async def google_adopt_cancel(callback: CallbackQuery, state: FSMContext) -> None:
         locale = await locale_for(callback.from_user.id)
-        await callback.message.edit_text(t(locale, "google_adopt_cancelled"))
-        await callback.answer()
+        await discard_flow(callback, state, locale, role="org")
 
     @router.message(Command("invite"))
     @router.message(F.text.in_(org_texts("invite")))
@@ -541,10 +799,11 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 await err(message, locale, exc)
             return
         await state.clear()
+        await state.set_state(OrganizerInvite.calendar)
         await pick_calendar(message, "o_invite", "choose_calendar_invite", locale)
 
     @router.callback_query(F.data.startswith("o_invite:"))
-    async def invite_pick(callback: CallbackQuery) -> None:
+    async def invite_pick(callback: CallbackQuery, state: FSMContext) -> None:
         calendar_id = int(callback.data.split(":", 1)[1])
         locale = await locale_for(callback.from_user.id)
         try:
@@ -554,6 +813,8 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             await callback.message.edit_text(t(locale, "share_invite", url=url))
         except (ValueError, PermissionError) as exc:
             await callback.message.edit_text(t(locale, "error", error=exc))
+        await state.clear()
+        await restore_menu(callback, locale)
         await callback.answer()
 
     @router.message(Command("newevent"))
@@ -580,6 +841,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 await err(message, locale, exc)
             return
         await state.clear()
+        await state.set_state(OrganizerNewEvent.calendar)
         await pick_calendar(message, "o_newevent", "choose_calendar_event", locale)
 
     @router.callback_query(F.data.startswith("o_newevent:"))
@@ -589,30 +851,31 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         await state.update_data(calendar_id=calendar_id)
         await state.set_state(OrganizerNewEvent.title)
         await callback.message.edit_text(t(locale, "enter_event_title"))
+        await callback.message.answer("\u2060", reply_markup=flow_nav_keyboard(locale))
         await callback.answer()
 
-    @router.message(OrganizerNewEvent.title, ~F.text.in_(ORGANIZER_BUTTONS))
+    @router.message(OrganizerNewEvent.title, ~F.text.in_(ORG_INPUT_BLOCKLIST))
     async def new_event_title(message: Message, state: FSMContext) -> None:
         await state.update_data(title=message.text.strip())
         await state.set_state(OrganizerNewEvent.start)
         locale = await locale_for(message.from_user.id)
-        await message.answer(t(locale, "enter_start_time"))
+        await message.answer(t(locale, "enter_start_time"), reply_markup=flow_nav_keyboard(locale))
 
-    @router.message(OrganizerNewEvent.start, ~F.text.in_(ORGANIZER_BUTTONS))
+    @router.message(OrganizerNewEvent.start, ~F.text.in_(ORG_INPUT_BLOCKLIST))
     async def new_event_start_time(message: Message, state: FSMContext) -> None:
         await state.update_data(start=message.text.strip())
         await state.set_state(OrganizerNewEvent.duration)
         locale = await locale_for(message.from_user.id)
-        await message.answer(t(locale, "enter_duration"))
+        await message.answer(t(locale, "enter_duration"), reply_markup=flow_nav_keyboard(locale))
 
-    @router.message(OrganizerNewEvent.duration, ~F.text.in_(ORGANIZER_BUTTONS))
+    @router.message(OrganizerNewEvent.duration, ~F.text.in_(ORG_INPUT_BLOCKLIST))
     async def new_event_duration(message: Message, state: FSMContext) -> None:
         await state.update_data(duration=message.text.strip())
         await state.set_state(OrganizerNewEvent.weeks)
         locale = await locale_for(message.from_user.id)
-        await message.answer(t(locale, "enter_weeks"))
+        await message.answer(t(locale, "enter_weeks"), reply_markup=flow_nav_keyboard(locale))
 
-    @router.message(OrganizerNewEvent.weeks, ~F.text.in_(ORGANIZER_BUTTONS))
+    @router.message(OrganizerNewEvent.weeks, ~F.text.in_(ORG_INPUT_BLOCKLIST))
     async def new_event_weeks(message: Message, state: FSMContext) -> None:
         data = await state.get_data()
         locale = await locale_for(message.from_user.id)
@@ -651,6 +914,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 await err(message, locale, exc)
             return
         await state.clear()
+        await state.set_state(OrganizerReschedule.calendar)
         await pick_calendar(message, "o_resched", "choose_calendar_reschedule", locale)
 
     @router.callback_query(F.data.startswith("o_resched:"))
@@ -660,12 +924,15 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         async with db.sessions() as session:
             rows = await fetch_future_events(session, calendar_id)
         if not rows:
+            await state.clear()
             await callback.message.edit_text(t(locale, "no_future_events"))
+            await restore_menu(callback, locale)
             await callback.answer()
             return
         await state.update_data(calendar_id=calendar_id)
+        await state.set_state(OrganizerReschedule.event)
         await callback.message.edit_text(
-            t(locale, "choose_event"), reply_markup=events_keyboard(rows, "o_resched_evt"))
+            t(locale, "choose_event"), reply_markup=events_keyboard(rows, "o_resched_evt", locale))
         await callback.answer()
 
     @router.callback_query(F.data.startswith("o_resched_evt:"))
@@ -675,9 +942,10 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         await state.update_data(event_id=event_id)
         await state.set_state(OrganizerReschedule.new_start)
         await callback.message.edit_text(t(locale, "enter_new_start"))
+        await callback.message.answer("\u2060", reply_markup=flow_nav_keyboard(locale))
         await callback.answer()
 
-    @router.message(OrganizerReschedule.new_start, ~F.text.in_(ORGANIZER_BUTTONS))
+    @router.message(OrganizerReschedule.new_start, ~F.text.in_(ORG_INPUT_BLOCKLIST))
     async def reschedule_time(message: Message, state: FSMContext) -> None:
         data = await state.get_data()
         locale = await locale_for(message.from_user.id)
@@ -696,32 +964,39 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
     async def cancel_event_start(message: Message, state: FSMContext) -> None:
         await state.clear()
         locale = await locale_for(message.from_user.id)
+        await state.set_state(OrganizerCancelEvent.calendar)
         await pick_calendar(message, "o_cancel", "choose_calendar", locale)
 
     @router.callback_query(F.data.startswith("o_cancel:"))
-    async def cancel_calendar(callback: CallbackQuery) -> None:
+    async def cancel_calendar(callback: CallbackQuery, state: FSMContext) -> None:
         calendar_id = int(callback.data.split(":", 1)[1])
         locale = await locale_for(callback.from_user.id)
         async with db.sessions() as session:
             rows = await fetch_future_events(session, calendar_id)
         if not rows:
+            await state.clear()
             await callback.message.edit_text(t(locale, "no_future_events"))
+            await restore_menu(callback, locale)
             await callback.answer()
             return
+        await state.update_data(calendar_id=calendar_id)
+        await state.set_state(OrganizerCancelEvent.event)
         await callback.message.edit_text(
-            t(locale, "choose_event_cancel"), reply_markup=events_keyboard(rows, "o_cancel_evt"))
+            t(locale, "choose_event_cancel"), reply_markup=events_keyboard(rows, "o_cancel_evt", locale))
         await callback.answer()
 
     @router.callback_query(F.data.startswith("o_cancel_evt:"))
-    async def cancel_event_confirm(callback: CallbackQuery) -> None:
+    async def cancel_event_confirm(callback: CallbackQuery, state: FSMContext) -> None:
         event_id = int(callback.data.split(":", 1)[1])
         locale = await locale_for(callback.from_user.id)
+        await state.update_data(event_id=event_id)
+        await state.set_state(OrganizerCancelEvent.confirm)
         await callback.message.edit_text(
             t(locale, "cancel_this_event"), reply_markup=confirm_cancel_keyboard(event_id, locale))
         await callback.answer()
 
     @router.callback_query(F.data.startswith("o_cancel_yes:"))
-    async def cancel_event_yes(callback: CallbackQuery) -> None:
+    async def cancel_event_yes(callback: CallbackQuery, state: FSMContext) -> None:
         event_id = int(callback.data.split(":", 1)[1])
         locale = await locale_for(callback.from_user.id)
         try:
@@ -733,13 +1008,14 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             await callback.message.edit_text(t(locale, "event_cancelled_notified"))
         except (ValueError, PermissionError) as exc:
             await callback.message.edit_text(t(locale, "error", error=exc))
+        await state.clear()
+        await restore_menu(callback, locale)
         await callback.answer()
 
     @router.callback_query(F.data == "o_cancel_no")
-    async def cancel_event_no(callback: CallbackQuery) -> None:
+    async def cancel_event_no(callback: CallbackQuery, state: FSMContext) -> None:
         locale = await locale_for(callback.from_user.id)
-        await callback.message.edit_text(t(locale, "cancellation_aborted"))
-        await callback.answer()
+        await discard_flow(callback, state, locale, role="org")
 
     @router.message(Command("confirmations"))
     @router.message(F.text.in_(org_texts("confirmations")))
@@ -754,27 +1030,38 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 if not rows:
                     await message.answer(t(locale, "no_future_events"), reply_markup=organizer_main_menu(locale))
                     return
-                await message.answer(t(locale, "choose_event"), reply_markup=events_keyboard(rows, "o_conf_evt"))
+                await state.set_state(OrganizerConfirmations.event)
+                await state.update_data(calendar_id=calendar_id)
+                await prompt_inline(
+                    message, t(locale, "choose_event"),
+                    events_keyboard(rows, "o_conf_evt", locale, show_back=False),
+                    locale, with_reply_nav=True,
+                )
             except ValueError as exc:
                 await err(message, locale, exc)
             return
+        await state.set_state(OrganizerConfirmations.calendar)
         await pick_calendar(message, "o_conf_cal", "choose_calendar_confirmations", locale)
 
     @router.callback_query(F.data.startswith("o_conf_cal:"))
-    async def confirmations_calendar(callback: CallbackQuery) -> None:
+    async def confirmations_calendar(callback: CallbackQuery, state: FSMContext) -> None:
         calendar_id = int(callback.data.split(":", 1)[1])
         locale = await locale_for(callback.from_user.id)
         async with db.sessions() as session:
             rows = await fetch_future_events(session, calendar_id)
         if not rows:
+            await state.clear()
             await callback.message.edit_text(t(locale, "no_future_events"))
+            await restore_menu(callback, locale)
             await callback.answer()
             return
-        await callback.message.edit_text(t(locale, "choose_event"), reply_markup=events_keyboard(rows, "o_conf_evt"))
+        await state.update_data(calendar_id=calendar_id)
+        await state.set_state(OrganizerConfirmations.event)
+        await callback.message.edit_text(t(locale, "choose_event"), reply_markup=events_keyboard(rows, "o_conf_evt", locale))
         await callback.answer()
 
     @router.callback_query(F.data.startswith("o_conf_evt:"))
-    async def confirmations_event(callback: CallbackQuery) -> None:
+    async def confirmations_event(callback: CallbackQuery, state: FSMContext) -> None:
         event_id = int(callback.data.split(":", 1)[1])
         locale = await locale_for(callback.from_user.id)
         async with db.sessions() as session:
@@ -789,10 +1076,13 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             text = t(
                 locale, "confirmations_for", title=event.title,
                 time=display_time(event.start_utc, calendar.timezone), names=names)
+        await state.clear()
         await callback.message.edit_text(text)
+        await restore_menu(callback, locale)
         await callback.answer()
 
     return router
+
 
 
 async def notify_subscribers(session, bot: Bot, calendar: Calendar, events: list[Event], heading_key: str) -> None:
@@ -832,6 +1122,37 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
     async def locale_for(telegram_id: int) -> str:
         async with db.sessions() as session:
             return await get_user_locale(session, telegram_id, settings.default_timezone)
+
+    async def restore_menu(target: Message | CallbackQuery, locale: str, text: str | None = None) -> None:
+        msg = target.message if isinstance(target, CallbackQuery) else target
+        await msg.answer(text or t(locale, "main_menu"), reply_markup=participant_main_menu(locale))
+
+    async def prompt_text(target: Message | CallbackQuery, text: str, locale: str) -> None:
+        if isinstance(target, CallbackQuery):
+            try:
+                await target.message.edit_text(text)
+            except Exception:
+                await target.message.answer(text, reply_markup=flow_nav_keyboard(locale))
+            else:
+                await target.message.answer("\u2060", reply_markup=flow_nav_keyboard(locale))
+            await target.answer()
+        else:
+            await target.answer(text, reply_markup=flow_nav_keyboard(locale))
+
+    async def prompt_inline(
+        target: Message | CallbackQuery, text: str, markup, locale: str, *, with_reply_nav: bool = False,
+    ) -> None:
+        if isinstance(target, CallbackQuery):
+            try:
+                await target.message.edit_text(text, reply_markup=markup)
+            except Exception:
+                await target.message.answer(text, reply_markup=markup)
+            if with_reply_nav:
+                await target.message.answer("\u2060", reply_markup=flow_nav_keyboard(locale))
+            await target.answer()
+        else:
+            await target.answer(text, reply_markup=markup)
+            await target.answer("\u2060", reply_markup=flow_nav_keyboard(locale))
 
     @router.message(CommandStart(deep_link=True))
     async def deep_start(message: Message, command: CommandObject) -> None:
@@ -895,10 +1216,76 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
     async def cancel_fsm(message: Message, state: FSMContext) -> None:
         locale = await locale_for(message.from_user.id)
         if await state.get_state():
-            await state.clear()
-            await message.answer(t(locale, "cancelled"), reply_markup=participant_main_menu(locale))
+            await discard_flow(message, state, locale, role="par")
         else:
-            await message.answer(t(locale, "nothing_to_cancel"))
+            await message.answer(t(locale, "nothing_to_cancel"), reply_markup=participant_main_menu(locale))
+
+    @router.message(F.text.in_(nav_texts("cancel")))
+    async def par_cancel_btn(message: Message, state: FSMContext) -> None:
+        locale = await locale_for(message.from_user.id)
+        if await state.get_state():
+            await discard_flow(message, state, locale, role="par")
+        else:
+            await message.answer(t(locale, "nothing_to_cancel"), reply_markup=participant_main_menu(locale))
+
+    @router.callback_query(F.data == FLOW_CANCEL_DATA)
+    async def par_cancel_cb(callback: CallbackQuery, state: FSMContext) -> None:
+        locale = await locale_for(callback.from_user.id)
+        if await state.get_state():
+            await discard_flow(callback, state, locale, role="par")
+        else:
+            await callback.answer(t(locale, "nothing_to_cancel"), show_alert=True)
+
+    async def par_flow_back(target: Message | CallbackQuery, state: FSMContext) -> None:
+        locale = await locale_for(target.from_user.id)
+        current = await state.get_state()
+        uid = target.from_user.id
+
+        if not current:
+            if isinstance(target, CallbackQuery):
+                await target.answer(t(locale, "nothing_to_cancel"), show_alert=True)
+            else:
+                await target.answer(t(locale, "nothing_to_cancel"), reply_markup=participant_main_menu(locale))
+            return
+
+        async def cancel() -> None:
+            await discard_flow(target, state, locale, role="par")
+
+        if current == ParticipantTimezone.timezone.state:
+            await cancel()
+        elif current == ParticipantReminders.calendar.state:
+            await cancel()
+        elif current == ParticipantReminders.minutes.state:
+            await state.set_state(ParticipantReminders.calendar)
+            await state.update_data(calendar_id=None)
+            async with db.sessions() as session:
+                data = await fetch_subscribed_calendars(session, uid)
+            calendars = [c for c, _ in data]
+            await prompt_inline(
+                target, t(locale, "choose_reminders"),
+                calendars_keyboard(calendars, "p_remind", locale, show_back=False),
+                locale, with_reply_nav=isinstance(target, Message),
+            )
+        elif current == ParticipantUpcoming.range_pick.state:
+            await cancel()
+        elif current == ParticipantConfirmPick.pick.state:
+            await cancel()
+        elif current == ParticipantMute.calendar.state:
+            await cancel()
+        elif current == ParticipantUnmute.calendar.state:
+            await cancel()
+        elif current == ParticipantUnsubscribe.calendar.state:
+            await cancel()
+        else:
+            await cancel()
+
+    @router.message(F.text.in_(nav_texts("back")))
+    async def par_back_btn(message: Message, state: FSMContext) -> None:
+        await par_flow_back(message, state)
+
+    @router.callback_query(F.data == FLOW_BACK_DATA)
+    async def par_back_cb(callback: CallbackQuery, state: FSMContext) -> None:
+        await par_flow_back(callback, state)
 
     async def reply_upcoming(message: Message, range_mode: str, locale: str) -> None:
         async with db.sessions() as session:
@@ -923,10 +1310,13 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
                 return
             await reply_upcoming(message, range_mode, locale)
             return
-        await message.answer(t(locale, "what_to_see"), reply_markup=event_range_keyboard("p_up_rng", locale))
+        await state.set_state(ParticipantUpcoming.range_pick)
+        await prompt_inline(
+            message, t(locale, "what_to_see"), event_range_keyboard("p_up_rng", locale), locale, with_reply_nav=True,
+        )
 
     @router.callback_query(F.data.startswith("p_up_rng:"))
-    async def upcoming_range_pick(callback: CallbackQuery) -> None:
+    async def upcoming_range_pick(callback: CallbackQuery, state: FSMContext) -> None:
         range_mode = callback.data.split(":", 1)[1]
         locale = await locale_for(callback.from_user.id)
         async with db.sessions() as session:
@@ -934,7 +1324,9 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
             rows = await upcoming_for_user_with_status(
                 session, callback.from_user.id, range_mode, settings.default_timezone)
         tz = user.timezone if user else settings.default_timezone
+        await state.clear()
         await callback.message.edit_text(format_participant_events(rows, tz, range_mode, locale))
+        await restore_menu(callback, locale)
         await callback.answer()
 
     @router.message(Command("confirm"))
@@ -953,9 +1345,11 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
             await message.answer(t(locale, "no_pending_confirm"), reply_markup=participant_main_menu(locale))
             return
         confirmed_ids = {e.id for e, _, confirmed in rows if confirmed}
-        await message.answer(
-            t(locale, "tap_to_confirm"),
-            reply_markup=upcoming_confirm_keyboard([e for e, _ in pending], confirmed_ids),
+        await state.set_state(ParticipantConfirmPick.pick)
+        await prompt_inline(
+            message, t(locale, "tap_to_confirm"),
+            upcoming_confirm_keyboard([e for e, _ in pending], confirmed_ids, locale),
+            locale, with_reply_nav=True,
         )
 
     async def handle_confirm(user, event_id: int, reply_target: Message | CallbackQuery, locale: str) -> None:
@@ -974,6 +1368,7 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
             text = t(locale, "error", error=exc)
         if isinstance(reply_target, CallbackQuery):
             await reply_target.message.edit_text(text)
+            await restore_menu(reply_target, locale)
             await reply_target.answer()
         else:
             await reply_target.answer(text, reply_markup=participant_main_menu(locale))
@@ -1016,9 +1411,9 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
             return
         await state.clear()
         await state.set_state(ParticipantTimezone.timezone)
-        await message.answer(t(locale, "enter_timezone"), reply_markup=participant_main_menu(locale))
+        await message.answer(t(locale, "enter_timezone"), reply_markup=flow_nav_keyboard(locale))
 
-    @router.message(ParticipantTimezone.timezone, ~F.text.in_(PARTICIPANT_BUTTONS))
+    @router.message(ParticipantTimezone.timezone, ~F.text.in_(PAR_INPUT_BLOCKLIST))
     async def timezone_value(message: Message, state: FSMContext) -> None:
         locale = await locale_for(message.from_user.id)
         try:
@@ -1029,14 +1424,19 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
             await message.answer(t(locale, "error", error=exc), reply_markup=participant_main_menu(locale))
         await state.clear()
 
-    async def pick_subscription(message: Message, prefix: str, prompt_key: str, locale: str) -> None:
+    async def pick_subscription(message: Message, prefix: str, prompt_key: str, locale: str) -> bool:
         async with db.sessions() as session:
             data = await fetch_subscribed_calendars(session, message.from_user.id)
         if not data:
             await message.answer(t(locale, "no_subscriptions"), reply_markup=participant_main_menu(locale))
-            return
+            return False
         calendars = [c for c, _ in data]
-        await message.answer(t(locale, prompt_key), reply_markup=calendars_keyboard(calendars, prefix))
+        await prompt_inline(
+            message, t(locale, prompt_key),
+            calendars_keyboard(calendars, prefix, locale, show_back=False),
+            locale, with_reply_nav=True,
+        )
+        return True
 
     async def state_action(message: Message, calendar_id: int, action: str, locale: str) -> None:
         try:
@@ -1055,6 +1455,7 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
         if command and command.args:
             await state_action(message, int(command.args.strip()), "mute", locale)
             return
+        await state.set_state(ParticipantMute.calendar)
         await pick_subscription(message, "p_mute", "choose_mute", locale)
 
     @router.message(Command("unmute"))
@@ -1065,6 +1466,7 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
         if command and command.args:
             await state_action(message, int(command.args.strip()), "unmute", locale)
             return
+        await state.set_state(ParticipantUnmute.calendar)
         await pick_subscription(message, "p_unmute", "choose_unmute", locale)
 
     @router.message(Command("unsubscribe"))
@@ -1075,34 +1477,41 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
         if command and command.args:
             await state_action(message, int(command.args.strip()), "unsubscribe", locale)
             return
+        await state.set_state(ParticipantUnsubscribe.calendar)
         await pick_subscription(message, "p_unsub", "choose_unsubscribe", locale)
 
     @router.callback_query(F.data.startswith("p_mute:"))
-    async def mute_pick(callback: CallbackQuery) -> None:
+    async def mute_pick(callback: CallbackQuery, state: FSMContext) -> None:
         calendar_id = int(callback.data.split(":", 1)[1])
         locale = await locale_for(callback.from_user.id)
         async with db.sessions() as session:
             changed = await set_subscription_state(session, callback.from_user.id, calendar_id, "mute")
+        await state.clear()
         await callback.message.edit_text(t(locale, "muted") if changed else t(locale, "subscription_not_found"))
+        await restore_menu(callback, locale)
         await callback.answer()
 
     @router.callback_query(F.data.startswith("p_unmute:"))
-    async def unmute_pick(callback: CallbackQuery) -> None:
+    async def unmute_pick(callback: CallbackQuery, state: FSMContext) -> None:
         calendar_id = int(callback.data.split(":", 1)[1])
         locale = await locale_for(callback.from_user.id)
         async with db.sessions() as session:
             changed = await set_subscription_state(session, callback.from_user.id, calendar_id, "unmute")
+        await state.clear()
         await callback.message.edit_text(t(locale, "unmuted") if changed else t(locale, "subscription_not_found"))
+        await restore_menu(callback, locale)
         await callback.answer()
 
     @router.callback_query(F.data.startswith("p_unsub:"))
-    async def unsub_pick(callback: CallbackQuery) -> None:
+    async def unsub_pick(callback: CallbackQuery, state: FSMContext) -> None:
         calendar_id = int(callback.data.split(":", 1)[1])
         locale = await locale_for(callback.from_user.id)
         async with db.sessions() as session:
             changed = await set_subscription_state(session, callback.from_user.id, calendar_id, "unsubscribe")
+        await state.clear()
         await callback.message.edit_text(
             t(locale, "unsubscribed") if changed else t(locale, "subscription_not_found"))
+        await restore_menu(callback, locale)
         await callback.answer()
 
     @router.message(Command("reminders"))
@@ -1124,6 +1533,7 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
                 await message.answer(t(locale, "error", error=detail), reply_markup=participant_main_menu(locale))
             return
         await state.clear()
+        await state.set_state(ParticipantReminders.calendar)
         await pick_subscription(message, "p_remind", "choose_reminders", locale)
 
     @router.callback_query(F.data.startswith("p_remind:"))
@@ -1133,9 +1543,10 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
         await state.update_data(calendar_id=calendar_id)
         await state.set_state(ParticipantReminders.minutes)
         await callback.message.edit_text(t(locale, "enter_reminders"))
+        await callback.message.answer("\u2060", reply_markup=flow_nav_keyboard(locale))
         await callback.answer()
 
-    @router.message(ParticipantReminders.minutes, ~F.text.in_(PARTICIPANT_BUTTONS))
+    @router.message(ParticipantReminders.minutes, ~F.text.in_(PAR_INPUT_BLOCKLIST))
     async def reminders_value(message: Message, state: FSMContext) -> None:
         data = await state.get_data()
         locale = await locale_for(message.from_user.id)
@@ -1151,6 +1562,7 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
         await state.clear()
 
     return router
+
 
 
 async def configure_commands(organizer: Bot, participant: Bot) -> None:

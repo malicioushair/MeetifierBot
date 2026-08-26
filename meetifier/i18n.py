@@ -43,6 +43,11 @@ PAR_BTN = {
     "help": {"en": "❓ Help", "ru": "❓ Помощь", "sr": "❓ Pomoć"},
 }
 
+NAV_BTN = {
+    "back": {"en": "⬅️ Back", "ru": "⬅️ Назад", "sr": "⬅️ Nazad"},
+    "cancel": {"en": "✖️ Cancel", "ru": "✖️ Отмена", "sr": "✖️ Otkaži"},
+}
+
 MESSAGES: dict[str, dict[str, str]] = {
     "en": {
         "org.welcome": "Welcome to Meetifier Organizer!",
@@ -91,8 +96,11 @@ MESSAGES: dict[str, dict[str, str]] = {
         "language_updated": "Language updated.",
         "main_menu": "Main menu:",
         "cancelled": "Cancelled.",
+        "flow_cancelled": "Cancelled. All progress for this action was discarded.",
         "nothing_to_cancel": "Nothing to cancel.",
         "nothing_to_cancel_event": "Nothing to cancel. Use ❌ Cancel event to cancel an event.",
+        "btn_back": "⬅️ Back",
+        "btn_flow_cancel": "✖️ Cancel",
         "error": "Error: {error}",
         "wrong_command": "Wrong command format. Send /help for examples.",
         "no_calendars": "No calendars yet.",
@@ -293,8 +301,11 @@ MESSAGES: dict[str, dict[str, str]] = {
         "language_updated": "Язык обновлён.",
         "main_menu": "Главное меню:",
         "cancelled": "Отменено.",
+        "flow_cancelled": "Отменено. Весь прогресс этого действия сброшен.",
         "nothing_to_cancel": "Нечего отменять.",
         "nothing_to_cancel_event": "Нечего отменять. Используйте ❌ Отменить событие.",
+        "btn_back": "⬅️ Назад",
+        "btn_flow_cancel": "✖️ Отмена",
         "error": "Ошибка: {error}",
         "wrong_command": "Неверный формат команды. Отправьте /help для примеров.",
         "no_calendars": "Календарей пока нет.",
@@ -495,8 +506,11 @@ MESSAGES: dict[str, dict[str, str]] = {
         "language_updated": "Jezik je ažuriran.",
         "main_menu": "Glavni meni:",
         "cancelled": "Otkazano.",
+        "flow_cancelled": "Otkazano. Sav napredak ove akcije je odbačen.",
         "nothing_to_cancel": "Nema šta da se otkaže.",
         "nothing_to_cancel_event": "Nema šta da se otkaže. Koristite ❌ Otkaži događaj.",
+        "btn_back": "⬅️ Nazad",
+        "btn_flow_cancel": "✖️ Otkaži",
         "error": "Greška: {error}",
         "wrong_command": "Pogrešan format komande. Pošaljite /help za primere.",
         "no_calendars": "Još nema kalendara.",

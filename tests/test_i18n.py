@@ -1,6 +1,22 @@
-from meetifier.i18n import LOCALES, MESSAGES, LOCALE_LABELS, ORG_BTN, PAR_BTN, normalize_locale, t
-from meetifier.keyboards import locale_keyboard, organizer_main_menu, participant_main_menu
+from meetifier.i18n import LOCALES, MESSAGES, LOCALE_LABELS, NAV_BTN, ORG_BTN, PAR_BTN, normalize_locale, t
+from meetifier.keyboards import (
+    calendars_keyboard, locale_keyboard, organizer_main_menu, participant_main_menu, flow_nav_keyboard,
+)
 from meetifier.service import get_or_create_user, set_locale
+
+
+def test_flow_nav_keyboard_and_inline_row():
+    markup = flow_nav_keyboard("en")
+    assert {btn.text for row in markup.keyboard for btn in row} == {
+        NAV_BTN["back"]["en"], NAV_BTN["cancel"]["en"],
+    }
+    from meetifier.db import Calendar
+    calendars = [Calendar(id=1, owner_user_id=1, name="Math", timezone="UTC")]
+    inline = calendars_keyboard(calendars, "o_invite", "ru", show_back=True)
+    flat = [btn for row in inline.inline_keyboard for btn in row]
+    assert any(btn.callback_data == "flow:back" for btn in flat)
+    assert any(btn.callback_data == "flow:cancel" for btn in flat)
+    assert flat[-1].text == t("ru", "btn_flow_cancel")
 
 
 def test_normalize_locale():
