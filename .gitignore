@@ -1,8 +1,10 @@
+.*
 .env
 .venv/
 __pycache__/
 .pytest_cache/
 .test-temp/
+.tmp/
 *.egg-info/
 *.pyc
 meetifier.db
