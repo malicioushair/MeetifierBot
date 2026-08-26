@@ -9,6 +9,7 @@ from sqlalchemy import select
 from .db import Calendar, Database, Event, NotificationJob, Subscription, User, utcnow
 from .config import Settings
 from .google_sync import sync_all_google_calendars
+from .i18n import normalize_locale, t
 from .keyboards import event_confirm_keyboard
 from .service import display_time
 
@@ -29,8 +30,13 @@ async def process_due_jobs(db: Database, bot: Bot) -> int:
                 job.state = "obsolete"; continue
             try:
                 minutes = job.kind.split(":", 1)[1]
-                await bot.send_message(user.telegram_id, f"Reminder ({minutes} min): {event.title}\n{display_time(event.start_utc, user.timezone)}\nCalendar: {calendar.name}",
-                                       reply_markup=event_confirm_keyboard(event.id))
+                locale = normalize_locale(user.locale)
+                await bot.send_message(
+                    user.telegram_id,
+                    t(locale, "reminder", minutes=minutes, title=event.title,
+                      time=display_time(event.start_utc, user.timezone), calendar=calendar.name),
+                    reply_markup=event_confirm_keyboard(event.id, locale),
+                )
                 job.state, job.sent_at = "sent", utcnow()
             except Exception as exc:
                 job.attempts += 1
@@ -56,7 +62,7 @@ async def run_google_sync_worker(db: Database, settings: Settings, participant_b
                 continue
             async with db.sessions() as session:
                 calendar = await session.get(Calendar, result.calendar_id)
-                telegram_ids = list((await session.scalars(select(User.telegram_id).join(Subscription).where(
+                users = list((await session.scalars(select(User).join(Subscription).where(
                     Subscription.calendar_id == result.calendar_id,
                     Subscription.active.is_(True),
                     Subscription.muted.is_(False),
@@ -65,18 +71,24 @@ async def run_google_sync_worker(db: Database, settings: Settings, participant_b
                     event = await session.get(Event, change.event_id)
                     if not event or not calendar:
                         continue
-                    heading = {
-                        "created": "New event",
-                        "updated": "Event updated",
-                        "cancelled": "Event cancelled",
+                    heading_key = {
+                        "created": "heading_new_event",
+                        "updated": "heading_event_updated",
+                        "cancelled": "heading_event_cancelled",
                     }[change.action]
-                    for telegram_id in telegram_ids:
+                    for user in users:
+                        locale = normalize_locale(user.locale)
                         try:
                             await participant_bot.send_message(
-                                telegram_id,
-                                f"{heading}: {event.title}\n{display_time(event.start_utc, calendar.timezone)}\n"
-                                f"Calendar: {calendar.name}",
-                                reply_markup=event_confirm_keyboard(event.id) if change.action != "cancelled" else None,
+                                user.telegram_id,
+                                t(locale, "notify_event", heading=t(locale, heading_key),
+                                  title=event.title,
+                                  time=display_time(event.start_utc, calendar.timezone),
+                                  calendar=calendar.name),
+                                reply_markup=(
+                                    event_confirm_keyboard(event.id, locale)
+                                    if change.action != "cancelled" else None
+                                ),
                             )
                         except Exception:
                             pass

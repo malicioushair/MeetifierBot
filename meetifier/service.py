@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import validate_timezone
 from .db import Calendar, Event, EventConfirmation, Invitation, NotificationJob, Subscription, User, utcnow
+from .i18n import DEFAULT_LOCALE, normalize_locale
 
 
 def parse_minutes(value: str) -> list[int]:
@@ -59,12 +60,32 @@ async def calendar_events(session: AsyncSession, calendar_id: int, range_mode: s
     return list((await session.scalars(query)).all())
 
 
-async def get_or_create_user(session: AsyncSession, telegram_id: int, default_timezone: str) -> User:
+async def get_or_create_user(session: AsyncSession, telegram_id: int, default_timezone: str,
+                             locale: str | None = None) -> User:
     user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
     if not user:
-        user = User(telegram_id=telegram_id, timezone=default_timezone)
+        user = User(
+            telegram_id=telegram_id,
+            timezone=default_timezone,
+            locale=normalize_locale(locale) if locale else DEFAULT_LOCALE,
+        )
         session.add(user)
         await session.flush()
+    return user
+
+
+async def get_user_locale(session: AsyncSession, telegram_id: int, default_timezone: str = "UTC") -> str:
+    user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+    if not user:
+        user = await get_or_create_user(session, telegram_id, default_timezone)
+        await session.commit()
+    return normalize_locale(user.locale)
+
+
+async def set_locale(session: AsyncSession, telegram_id: int, locale: str, default_tz: str) -> User:
+    user = await get_or_create_user(session, telegram_id, default_tz)
+    user.locale = normalize_locale(locale)
+    await session.commit()
     return user
 
 

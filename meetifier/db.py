@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import AsyncIterator
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, inspect, text
 from sqlalchemy.ext.asyncio import AsyncAttrs, AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from .i18n import DEFAULT_LOCALE
 
 
 def utcnow() -> datetime:
@@ -22,6 +24,7 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    locale: Mapped[str] = mapped_column(String(8), default=DEFAULT_LOCALE)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -160,6 +163,7 @@ class Database:
     async def init(self) -> None:
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
+            await connection.run_sync(_ensure_user_locale_column)
 
     async def session(self) -> AsyncIterator[AsyncSession]:
         async with self.sessions() as session:
@@ -167,3 +171,9 @@ class Database:
 
     async def close(self) -> None:
         await self.engine.dispose()
+
+
+def _ensure_user_locale_column(sync_conn) -> None:
+    columns = {column["name"] for column in inspect(sync_conn).get_columns("users")}
+    if "locale" not in columns:
+        sync_conn.execute(text(f"ALTER TABLE users ADD COLUMN locale VARCHAR(8) DEFAULT '{DEFAULT_LOCALE}'"))

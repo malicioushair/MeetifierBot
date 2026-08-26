@@ -5,10 +5,12 @@ import logging
 
 from aiohttp import web
 from aiogram import Bot
+from sqlalchemy import select
 
 from .config import Settings
-from .db import Database
+from .db import Database, User
 from .google_sync import complete_oauth, consume_oauth_state, google_enabled, save_google_account
+from .i18n import normalize_locale, t
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +45,12 @@ async def google_callback(request: web.Request) -> web.Response:
         async with db.sessions() as session:
             await save_google_account(session, telegram_id, settings.default_timezone, refresh_token, access_token, expiry, email)
         try:
+            async with db.sessions() as session:
+                user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+                locale = normalize_locale(user.locale if user else None)
             await bot.send_message(
                 telegram_id,
-                f"Google account linked: {email or 'connected'}. Use 📎 Map to Google to choose a calendar.",
+                t(locale, "google_linked", email=email or t(locale, "google_connected")),
             )
         except Exception as exc:
             logger.warning("Could not notify organizer %s: %s", telegram_id, exc)

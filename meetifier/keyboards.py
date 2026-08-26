@@ -3,98 +3,88 @@ from __future__ import annotations
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
 from .db import Calendar, Event
+from .i18n import LOCALES, LOCALE_LABELS, ORG_BTN, PAR_BTN, all_btn_texts, btn, t
 
-# Organizer reply keyboard labels
-ORG_CALENDARS = "📅 Calendars"
-ORG_NEW_CALENDAR = "➕ New calendar"
-ORG_NEW_EVENT = "➕ New event"
-ORG_EVENTS = "📋 Events"
-ORG_INVITE = "🔗 Invite"
-ORG_RESCHEDULE = "✏️ Reschedule"
-ORG_CANCEL = "❌ Cancel event"
-ORG_CONFIRMATIONS = "✅ Confirmations"
-ORG_GOOGLE_LINK = "🔗 Link Google"
-ORG_GOOGLE_MAP = "📎 Map to Google"
-ORG_GOOGLE_IMPORT = "⬇️ Import Google"
-ORG_GOOGLE_SYNC = "🔄 Sync Google"
-ORG_GOOGLE_ADOPT = "📣 Invite Google guests"
-ORG_HELP = "❓ Help"
-
-ORGANIZER_BUTTONS = {
-    ORG_CALENDARS, ORG_NEW_CALENDAR, ORG_NEW_EVENT, ORG_EVENTS,
-    ORG_INVITE, ORG_RESCHEDULE, ORG_CANCEL, ORG_CONFIRMATIONS,
-    ORG_GOOGLE_LINK, ORG_GOOGLE_MAP, ORG_GOOGLE_IMPORT, ORG_GOOGLE_SYNC,
-    ORG_GOOGLE_ADOPT, ORG_HELP,
-}
-
-# Participant reply keyboard labels
-PAR_UPCOMING = "📅 Upcoming"
-PAR_CONFIRM = "✅ Confirm"
-PAR_SUBSCRIPTIONS = "📋 Subscriptions"
-PAR_TIMEZONE = "🌍 Timezone"
-PAR_REMINDERS = "⏰ Reminders"
-PAR_MUTE = "🔇 Mute"
-PAR_UNMUTE = "🔊 Unmute"
-PAR_UNSUBSCRIBE = "🚫 Unsubscribe"
-PAR_HELP = "❓ Help"
-
-PARTICIPANT_BUTTONS = {
-    PAR_UPCOMING, PAR_CONFIRM, PAR_SUBSCRIPTIONS, PAR_TIMEZONE, PAR_REMINDERS,
-    PAR_MUTE, PAR_UNMUTE, PAR_UNSUBSCRIBE, PAR_HELP,
-}
+ORGANIZER_BUTTONS = all_btn_texts(ORG_BTN)
+PARTICIPANT_BUTTONS = all_btn_texts(PAR_BTN)
 
 
-def organizer_main_menu() -> ReplyKeyboardMarkup:
+def org_texts(*actions: str) -> set[str]:
+    return all_btn_texts(ORG_BTN, *actions)
+
+
+def par_texts(*actions: str) -> set[str]:
+    return all_btn_texts(PAR_BTN, *actions)
+
+
+def organizer_main_menu(locale: str | None = None) -> ReplyKeyboardMarkup:
+    b = lambda action: KeyboardButton(text=btn(ORG_BTN, action, locale))
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=ORG_CALENDARS), KeyboardButton(text=ORG_NEW_CALENDAR)],
-            [KeyboardButton(text=ORG_NEW_EVENT), KeyboardButton(text=ORG_EVENTS)],
-            [KeyboardButton(text=ORG_INVITE), KeyboardButton(text=ORG_RESCHEDULE)],
-            [KeyboardButton(text=ORG_CANCEL), KeyboardButton(text=ORG_CONFIRMATIONS)],
-            [KeyboardButton(text=ORG_GOOGLE_LINK), KeyboardButton(text=ORG_GOOGLE_MAP)],
-            [KeyboardButton(text=ORG_GOOGLE_IMPORT), KeyboardButton(text=ORG_GOOGLE_SYNC)],
-            [KeyboardButton(text=ORG_GOOGLE_ADOPT)],
-            [KeyboardButton(text=ORG_HELP)],
+            [b("calendars"), b("new_calendar")],
+            [b("new_event"), b("events")],
+            [b("invite"), b("reschedule")],
+            [b("cancel_event"), b("confirmations")],
+            [b("google_link"), b("google_map")],
+            [b("google_import"), b("google_sync")],
+            [b("google_adopt")],
+            [b("language"), b("help")],
         ],
         resize_keyboard=True,
     )
 
 
-def participant_main_menu() -> ReplyKeyboardMarkup:
+def participant_main_menu(locale: str | None = None) -> ReplyKeyboardMarkup:
+    b = lambda action: KeyboardButton(text=btn(PAR_BTN, action, locale))
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=PAR_UPCOMING), KeyboardButton(text=PAR_CONFIRM)],
-            [KeyboardButton(text=PAR_SUBSCRIPTIONS), KeyboardButton(text=PAR_TIMEZONE)],
-            [KeyboardButton(text=PAR_REMINDERS), KeyboardButton(text=PAR_MUTE)],
-            [KeyboardButton(text=PAR_UNMUTE), KeyboardButton(text=PAR_UNSUBSCRIBE)],
-            [KeyboardButton(text=PAR_HELP)],
+            [b("upcoming"), b("confirm")],
+            [b("subscriptions"), b("timezone")],
+            [b("reminders"), b("mute")],
+            [b("unmute"), b("unsubscribe")],
+            [b("language"), b("help")],
         ],
         resize_keyboard=True,
     )
 
 
-def event_range_keyboard(prefix: str) -> InlineKeyboardMarkup:
+def locale_keyboard(prefix: str = "set_locale") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=LOCALE_LABELS[code], callback_data=f"{prefix}:{code}")]
+            for code in LOCALES
+        ]
+    )
+
+
+def event_range_keyboard(prefix: str, locale: str | None = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[
-            InlineKeyboardButton(text="Next event", callback_data=f"{prefix}:next"),
-            InlineKeyboardButton(text="This week", callback_data=f"{prefix}:week"),
+            InlineKeyboardButton(text=t(locale, "btn_next_event"), callback_data=f"{prefix}:next"),
+            InlineKeyboardButton(text=t(locale, "btn_this_week"), callback_data=f"{prefix}:week"),
         ]]
     )
 
 
-def google_calendars_keyboard(count: int, prefix: str = "o_gcal_pick") -> InlineKeyboardMarkup:
+def google_calendars_keyboard(count: int, locale: str | None = None, prefix: str = "o_gcal_pick") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=f"Google calendar #{i + 1}", callback_data=f"{prefix}:{i}")]
+            [InlineKeyboardButton(
+                text=t(locale, "btn_google_cal", n=i + 1),
+                callback_data=f"{prefix}:{i}",
+            )]
             for i in range(min(count, 10))
         ]
     )
 
 
-def confirm_google_adoption_keyboard(calendar_id: int) -> InlineKeyboardMarkup:
+def confirm_google_adoption_keyboard(calendar_id: int, locale: str | None = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Notify Google attendees", callback_data=f"o_gadopt_yes:{calendar_id}"),
-        InlineKeyboardButton(text="Cancel", callback_data="o_gadopt_no"),
+        InlineKeyboardButton(
+            text=t(locale, "btn_notify_attendees"),
+            callback_data=f"o_gadopt_yes:{calendar_id}",
+        ),
+        InlineKeyboardButton(text=t(locale, "btn_cancel"), callback_data="o_gadopt_no"),
     ]])
 
 
@@ -114,9 +104,12 @@ def events_keyboard(events: list[Event], prefix: str) -> InlineKeyboardMarkup:
     )
 
 
-def event_confirm_keyboard(event_id: int) -> InlineKeyboardMarkup:
+def event_confirm_keyboard(event_id: int, locale: str | None = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="✅ Confirm attendance", callback_data=f"p_confirm:{event_id}")]]
+        inline_keyboard=[[InlineKeyboardButton(
+            text=t(locale, "btn_confirm_attendance"),
+            callback_data=f"p_confirm:{event_id}",
+        )]]
     )
 
 
@@ -129,10 +122,10 @@ def upcoming_confirm_keyboard(events: list[Event], confirmed_ids: set[int]) -> I
     return InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else InlineKeyboardMarkup(inline_keyboard=[])
 
 
-def confirm_cancel_keyboard(event_id: int) -> InlineKeyboardMarkup:
+def confirm_cancel_keyboard(event_id: int, locale: str | None = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[
-            InlineKeyboardButton(text="Yes, cancel", callback_data=f"o_cancel_yes:{event_id}"),
-            InlineKeyboardButton(text="No", callback_data="o_cancel_no"),
+            InlineKeyboardButton(text=t(locale, "btn_yes_cancel"), callback_data=f"o_cancel_yes:{event_id}"),
+            InlineKeyboardButton(text=t(locale, "btn_no"), callback_data="o_cancel_no"),
         ]]
     )
