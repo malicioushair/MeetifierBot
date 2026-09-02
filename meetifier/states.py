@@ -6,6 +6,12 @@ from aiogram.fsm.state import State, StatesGroup
 class OrganizerNewCalendar(StatesGroup):
     name = State()
     timezone = State()
+    confirmation = State()
+
+
+class OrganizerConfirmTiming(StatesGroup):
+    calendar = State()
+    minutes = State()
 
 
 class OrganizerNewEvent(StatesGroup):

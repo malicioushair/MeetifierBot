@@ -12,7 +12,7 @@ from .config import Settings
 from .google_sync import sync_all_google_calendars
 from .i18n import normalize_locale, t
 from .keyboards import event_confirm_keyboard
-from .service import display_time
+from .service import JOB_KIND_CONFIRM, JOB_KIND_REMINDER, display_time
 
 
 async def process_due_jobs(db: Database, bot: Bot) -> int:
@@ -33,21 +33,36 @@ async def process_due_jobs(db: Database, bot: Bot) -> int:
                 Subscription.user_id == job.user_id,
                 Subscription.calendar_id == occurrence.event.calendar_id,
             )) if occurrence else None
+            kind_type, _, offset = job.kind.partition(":")
+            is_confirm = kind_type == JOB_KIND_CONFIRM
+            is_reminder = kind_type == JOB_KIND_REMINDER
             if (
                 not occurrence or occurrence.status != "active" or occurrence.event.status != "active"
-                or occurrence.version != job.occurrence_version or not sub or not sub.active or sub.muted
+                or occurrence.version != job.occurrence_version or not sub or not sub.active
+                or not (is_confirm or is_reminder)
             ):
                 job.state = "obsolete"
                 continue
+            # Mute only suppresses participant-controlled notifications, not organizer confirmation asks.
+            if is_reminder and sub.muted:
+                job.state = "obsolete"
+                continue
             try:
-                minutes = job.kind.split(":", 1)[1]
                 locale = normalize_locale(user.locale)
-                await bot.send_message(
-                    user.telegram_id,
-                    t(locale, "reminder", minutes=minutes, title=occurrence.event.title,
-                      time=display_time(occurrence.start_utc, user.timezone), calendar=calendar.name),
-                    reply_markup=event_confirm_keyboard(occurrence.id, locale),
-                )
+                time_text = display_time(occurrence.start_utc, user.timezone)
+                if is_confirm:
+                    text = t(
+                        locale, "confirm_request", hours=offset, title=occurrence.event.title,
+                        time=time_text, calendar=calendar.name,
+                    )
+                    markup = event_confirm_keyboard(occurrence.id, locale)
+                else:
+                    text = t(
+                        locale, "reminder", minutes=offset, title=occurrence.event.title,
+                        time=time_text, calendar=calendar.name,
+                    )
+                    markup = None
+                await bot.send_message(user.telegram_id, text, reply_markup=markup)
                 job.state, job.sent_at = "sent", utcnow()
             except Exception as exc:
                 job.attempts += 1

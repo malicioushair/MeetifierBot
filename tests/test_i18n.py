@@ -34,7 +34,7 @@ def test_onboarding_covers_flow_and_features():
         assert "1." in org and "5." in org
         assert "1." in par and "5." in par
         assert "Google" in org
-        assert "1440" in par
+        assert "60" in par
 
 
 def test_translation_parity_and_format():
@@ -44,8 +44,9 @@ def test_translation_parity_and_format():
         assert set(MESSAGES[locale]) == keys
         assert t(locale, "choose_language")
         assert "{name}" not in t(locale, "calendar_created", name="Math", id=1)
-    assert "Напоминание" in t("ru", "reminder", minutes=30, title="X", time="T", calendar="C")
-    assert "Podsetnik" in t("sr", "reminder", minutes=30, title="X", time="T", calendar="C")
+    assert "Уведомление" in t("ru", "reminder", minutes=30, title="X", time="T", calendar="C")
+    assert "Obaveštenje" in t("sr", "reminder", minutes=30, title="X", time="T", calendar="C")
+    assert "подтверд" in t("ru", "confirm_request", hours=24, title="X", time="T", calendar="C").lower()
 
 
 def test_button_labels_cover_all_locales():

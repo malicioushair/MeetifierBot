@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from sqlalchemy import select
 
-from meetifier.db import Database, Event, EventConfirmation, EventOccurrence, NotificationJob, Subscription, utcnow
+from meetifier.db import Calendar, Database, Event, EventConfirmation, EventOccurrence, NotificationJob, Subscription, utcnow
 from meetifier.recurrence import RecurrenceRule, generate_starts_utc
 from meetifier.service import (calendar_event_series, calendar_events, change_event, confirm_event,
                                confirmations_for_event, create_calendar, create_events, display_time,
@@ -46,27 +46,6 @@ def test_parse_minutes():
         parse_minutes("later")
 
 
-def test_weekly_multi_day_and_interval():
-    rule = RecurrenceRule.weekly(weekdays=[0, 2], interval=1, count=4)  # Mon+Wed
-    starts = generate_starts_utc(rule, "2030-01-07 18:00", 0, 60)  # Monday
-    assert [s[0].date().isoformat() for s in starts] == [
-        "2030-01-07", "2030-01-09", "2030-01-14", "2030-01-16",
-    ]
-    biweekly = RecurrenceRule.weekly(weekdays=[0], interval=2, count=3)
-    starts = generate_starts_utc(biweekly, "2030-01-07 18:00", 0, 60)
-    assert [s[0].date().isoformat() for s in starts] == [
-        "2030-01-07", "2030-01-21", "2030-02-04",
-    ]
-
-
-def test_first_tuesday_monthly():
-    rule = RecurrenceRule.monthly_nth(weekday=1, bysetpos=1, count=3)  # first Tuesday
-    starts = generate_starts_utc(rule, "2030-01-01 18:00", 0, 60)
-    assert [s[0].date().isoformat() for s in starts] == [
-        "2030-01-01", "2030-02-05", "2030-03-05",
-    ]
-
-
 async def prepared(db):
     async with db.sessions() as session:
         calendar = await create_calendar(session, 100, "Math", 3, 0)
@@ -86,7 +65,82 @@ async def test_weekly_events_and_durable_jobs(db):
     assert events[0].recurrence_json
     assert len({occ.event_id for occ in occurrences}) == 1
     assert occurrences[1].start_utc - occurrences[0].start_utc == timedelta(weeks=1)
+    # 3 occurrences × (confirm:24 + reminder:60)
     assert len(jobs) == 6
+    kinds = {job.kind for job in jobs}
+    assert kinds == {"confirm:24", "reminder:60"}
+
+
+async def test_participant_notification_override(db):
+    from meetifier.service import set_reminders
+
+    calendar = await prepared(db)
+    async with db.sessions() as session:
+        await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60)
+        await set_reminders(session, 200, calendar.id, "30")
+        jobs = (await session.scalars(select(NotificationJob).where(
+            NotificationJob.state == "pending"))).all()
+    kinds = sorted(job.kind for job in jobs)
+    assert kinds == ["confirm:24", "reminder:30"]
+
+
+async def test_organizer_confirmation_timing(db):
+    from meetifier.service import set_confirmation_hours
+
+    calendar = await prepared(db)
+    async with db.sessions() as session:
+        await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60)
+        await set_confirmation_hours(session, 100, calendar.id, "2")
+        jobs = (await session.scalars(select(NotificationJob).where(
+            NotificationJob.state == "pending"))).all()
+        calendar = await session.get(Calendar, calendar.id)
+    kinds = sorted(job.kind for job in jobs)
+    assert calendar.confirmation_hours == "2"
+    assert kinds == ["confirm:2", "reminder:60"]
+
+
+async def test_mute_skips_only_participant_notifications(db):
+    calendar = await prepared(db)
+    async with db.sessions() as session:
+        await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60)
+        await set_subscription_state(session, 200, calendar.id, "mute")
+        for job in (await session.scalars(select(NotificationJob))).all():
+            job.scheduled_at = utcnow()
+        await session.commit()
+    bot = AsyncMock()
+    bot.send_message = AsyncMock()
+    processed = await process_due_jobs(db, bot)
+    async with db.sessions() as session:
+        jobs = list((await session.scalars(select(NotificationJob))).all())
+    by_kind = {job.kind: job.state for job in jobs}
+    assert by_kind["reminder:60"] == "obsolete"
+    assert by_kind["confirm:24"] == "sent"
+    assert processed == 1
+    bot.send_message.assert_awaited()
+    sent_text = bot.send_message.await_args.args[1]
+    assert "Please confirm attendance" in sent_text
+    assert bot.send_message.await_args.kwargs.get("reply_markup") is not None
+
+
+def test_weekly_multi_day_and_interval():
+    rule = RecurrenceRule.weekly(weekdays=[0, 2], interval=1, count=4)  # Mon+Wed
+    starts = generate_starts_utc(rule, "2030-01-07 18:00", 0, 60)  # Monday
+    assert [s[0].date().isoformat() for s in starts] == [
+        "2030-01-07", "2030-01-09", "2030-01-14", "2030-01-16",
+    ]
+    biweekly = RecurrenceRule.weekly(weekdays=[0], interval=2, count=3)
+    starts = generate_starts_utc(biweekly, "2030-01-07 18:00", 0, 60)
+    assert [s[0].date().isoformat() for s in starts] == [
+        "2030-01-07", "2030-01-21", "2030-02-04",
+    ]
+
+
+def test_first_tuesday_monthly():
+    rule = RecurrenceRule.monthly_nth(weekday=1, bysetpos=1, count=3)  # first Tuesday
+    starts = generate_starts_utc(rule, "2030-01-01 18:00", 0, 60)
+    assert [s[0].date().isoformat() for s in starts] == [
+        "2030-01-01", "2030-02-05", "2030-03-05",
+    ]
 
 
 async def test_create_with_recurrence_rule(db):
@@ -223,14 +277,35 @@ async def test_worker_sends_and_records_delivery(db):
     calendar = await prepared(db)
     async with db.sessions() as session:
         await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60)
-        job = await session.scalar(select(NotificationJob))
+        job = await session.scalar(select(NotificationJob).where(NotificationJob.kind == "confirm:24"))
+        job_id = job.id
         job.scheduled_at = utcnow()
         await session.commit()
     bot = AsyncMock()
     bot.send_message = AsyncMock()
     processed = await process_due_jobs(db, bot)
     async with db.sessions() as session:
-        job = await session.scalar(select(NotificationJob))
+        job = await session.get(NotificationJob, job_id)
     assert processed == 1
     assert job.state == "sent"
     bot.send_message.assert_awaited()
+    assert bot.send_message.await_args.kwargs.get("reply_markup") is not None
+
+
+async def test_worker_sends_participant_notification_without_confirm_button(db):
+    calendar = await prepared(db)
+    async with db.sessions() as session:
+        await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60)
+        job = await session.scalar(select(NotificationJob).where(NotificationJob.kind == "reminder:60"))
+        job_id = job.id
+        job.scheduled_at = utcnow()
+        await session.commit()
+    bot = AsyncMock()
+    bot.send_message = AsyncMock()
+    processed = await process_due_jobs(db, bot)
+    async with db.sessions() as session:
+        job = await session.get(NotificationJob, job_id)
+    assert processed == 1
+    assert job.state == "sent"
+    assert bot.send_message.await_args.kwargs.get("reply_markup") is None
+    assert "Notification" in bot.send_message.await_args.args[1]

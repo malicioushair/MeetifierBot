@@ -9,20 +9,56 @@ from sqlalchemy.orm import selectinload
 
 from .config import format_timezone_offset, parse_timezone_offset, tzinfo_from_offset, validate_timezone
 from .db import (
-    Calendar, Event, EventConfirmation, EventOccurrence, Invitation, NotificationJob, Subscription, User, utcnow,
+    DEFAULT_CONFIRMATION_HOURS,
+    DEFAULT_NOTIFICATION_MINUTES,
+    Calendar,
+    Event,
+    EventConfirmation,
+    EventOccurrence,
+    Invitation,
+    NotificationJob,
+    Subscription,
+    User,
+    utcnow,
 )
 from .i18n import DEFAULT_LOCALE, normalize_locale
 from .recurrence import RecurrenceRule
+
+JOB_KIND_CONFIRM = "confirm"
+JOB_KIND_REMINDER = "reminder"
 
 
 def parse_minutes(value: str) -> list[int]:
     try:
         result = sorted({int(x.strip()) for x in value.split(",") if x.strip()}, reverse=True)
     except ValueError as exc:
-        raise ValueError("Reminders must be comma-separated minutes, e.g. 1440,30") from exc
+        raise ValueError("Minutes must be comma-separated integers, e.g. 60 or 120,30") from exc
     if not result or any(x < 0 or x > 525600 for x in result):
-        raise ValueError("Reminder minutes must be between 0 and 525600")
+        raise ValueError("Minutes must be between 0 and 525600")
     return result
+
+
+def parse_hours(value: str) -> list[int]:
+    try:
+        result = sorted({int(x.strip()) for x in value.split(",") if x.strip()}, reverse=True)
+    except ValueError as exc:
+        raise ValueError("Hours must be comma-separated integers, e.g. 24 or 48,24") from exc
+    if not result or any(x < 0 or x > 8760 for x in result):
+        raise ValueError("Hours must be between 0 and 8760")
+    return result
+
+
+def confirmation_offsets(calendar: Calendar) -> list[int]:
+    """Lead times in hours before the event for attendance confirmation asks."""
+    return parse_hours(calendar.confirmation_hours or DEFAULT_CONFIRMATION_HOURS)
+
+
+def notification_offsets(sub: Subscription) -> list[int]:
+    return parse_minutes(sub.notification_minutes or DEFAULT_NOTIFICATION_MINUTES)
+
+
+def job_kind(kind: str, offset: int) -> str:
+    return f"{kind}:{offset}"
 
 
 def local_to_utc(value: str, tz_offset_hours: int | str) -> datetime:
@@ -157,10 +193,17 @@ async def set_locale(session: AsyncSession, telegram_id: int, locale: str, defau
 
 
 async def create_calendar(session: AsyncSession, telegram_id: int, name: str, tz_offset_hours: int | str,
-                          default_tz: int | str) -> Calendar:
+                          default_tz: int | str, confirmation_hours: str | None = None) -> Calendar:
     hours = validate_timezone(tz_offset_hours)
     user = await get_or_create_user(session, telegram_id, default_tz)
-    calendar = Calendar(owner_user_id=user.id, name=name.strip(), timezone=hours)
+    confirm = confirmation_hours if confirmation_hours is not None else DEFAULT_CONFIRMATION_HOURS
+    parse_hours(confirm)
+    calendar = Calendar(
+        owner_user_id=user.id,
+        name=name.strip(),
+        timezone=hours,
+        confirmation_hours=confirm,
+    )
     session.add(calendar)
     await session.commit()
     return calendar
@@ -214,13 +257,22 @@ async def create_jobs_for_occurrence(session: AsyncSession, occurrence: EventOcc
     subscriptions = (await session.scalars(select(Subscription).where(
         Subscription.calendar_id == calendar.id, Subscription.active.is_(True)))).all()
     now = utcnow()
+    confirm_hours = confirmation_offsets(calendar)
     for sub in subscriptions:
-        minutes = parse_minutes(sub.custom_reminder_minutes or calendar.reminder_minutes)
-        for minute in minutes:
+        for hour in confirm_hours:
+            scheduled = occurrence.start_utc - timedelta(hours=hour)
+            if scheduled >= now:
+                session.add(NotificationJob(
+                    occurrence_id=occurrence.id, user_id=sub.user_id,
+                    kind=job_kind(JOB_KIND_CONFIRM, hour),
+                    occurrence_version=occurrence.version, scheduled_at=scheduled,
+                ))
+        for minute in notification_offsets(sub):
             scheduled = occurrence.start_utc - timedelta(minutes=minute)
             if scheduled >= now:
                 session.add(NotificationJob(
-                    occurrence_id=occurrence.id, user_id=sub.user_id, kind=f"reminder:{minute}",
+                    occurrence_id=occurrence.id, user_id=sub.user_id,
+                    kind=job_kind(JOB_KIND_REMINDER, minute),
                     occurrence_version=occurrence.version, scheduled_at=scheduled,
                 ))
 
@@ -270,18 +322,29 @@ async def subscribe(session: AsyncSession, telegram_id: int, token: str, default
 async def create_jobs_for_subscriber(
     session: AsyncSession, occurrence: EventOccurrence, calendar: Calendar, sub: Subscription,
 ) -> None:
-    for minute in parse_minutes(sub.custom_reminder_minutes or calendar.reminder_minutes):
-        scheduled = occurrence.start_utc - timedelta(minutes=minute)
-        if scheduled >= utcnow():
-            existing = await session.scalar(select(NotificationJob.id).where(
-                NotificationJob.occurrence_id == occurrence.id, NotificationJob.user_id == sub.user_id,
-                NotificationJob.kind == f"reminder:{minute}",
-                NotificationJob.occurrence_version == occurrence.version))
-            if not existing:
-                session.add(NotificationJob(
-                    occurrence_id=occurrence.id, user_id=sub.user_id, kind=f"reminder:{minute}",
-                    occurrence_version=occurrence.version, scheduled_at=scheduled,
-                ))
+    now = utcnow()
+    kinds_offsets = (
+        [(JOB_KIND_CONFIRM, h, "hours") for h in confirmation_offsets(calendar)]
+        + [(JOB_KIND_REMINDER, m, "minutes") for m in notification_offsets(sub)]
+    )
+    for kind, offset, unit in kinds_offsets:
+        scheduled = (
+            occurrence.start_utc - timedelta(hours=offset)
+            if unit == "hours"
+            else occurrence.start_utc - timedelta(minutes=offset)
+        )
+        if scheduled < now:
+            continue
+        kind_value = job_kind(kind, offset)
+        existing = await session.scalar(select(NotificationJob.id).where(
+            NotificationJob.occurrence_id == occurrence.id, NotificationJob.user_id == sub.user_id,
+            NotificationJob.kind == kind_value,
+            NotificationJob.occurrence_version == occurrence.version))
+        if not existing:
+            session.add(NotificationJob(
+                occurrence_id=occurrence.id, user_id=sub.user_id, kind=kind_value,
+                occurrence_version=occurrence.version, scheduled_at=scheduled,
+            ))
 
 
 async def change_event(
@@ -478,11 +541,80 @@ async def upcoming_for_user_with_status(session: AsyncSession, telegram_id: int,
 
 
 async def set_reminders(session: AsyncSession, telegram_id: int, calendar_id: int, value: str) -> bool:
+    """Participant-only pre-event notification offsets for a subscription."""
     parse_minutes(value)
     sub = await session.scalar(select(Subscription).join(User).where(
         User.telegram_id == telegram_id, Subscription.calendar_id == calendar_id, Subscription.active.is_(True)))
     if not sub:
         return False
-    sub.custom_reminder_minutes = value
+    sub.notification_minutes = value
+    occurrence_ids = select(EventOccurrence.id).join(Event).where(
+        Event.calendar_id == calendar_id,
+        Event.status == "active",
+        EventOccurrence.status == "active",
+        EventOccurrence.start_utc > utcnow(),
+    )
+    await session.execute(update(NotificationJob).where(
+        NotificationJob.user_id == sub.user_id,
+        NotificationJob.occurrence_id.in_(occurrence_ids),
+        NotificationJob.state == "pending",
+        NotificationJob.kind.like(f"{JOB_KIND_REMINDER}:%"),
+    ).values(state="obsolete"))
+    future = (await session.scalars(
+        select(EventOccurrence)
+        .options(selectinload(EventOccurrence.event))
+        .where(EventOccurrence.id.in_(occurrence_ids))
+    )).all()
+    for occurrence in future:
+        for minute in notification_offsets(sub):
+            scheduled = occurrence.start_utc - timedelta(minutes=minute)
+            if scheduled >= utcnow():
+                session.add(NotificationJob(
+                    occurrence_id=occurrence.id, user_id=sub.user_id,
+                    kind=job_kind(JOB_KIND_REMINDER, minute),
+                    occurrence_version=occurrence.version, scheduled_at=scheduled,
+                ))
     await session.commit()
     return True
+
+
+async def set_confirmation_hours(
+    session: AsyncSession, owner_telegram_id: int, calendar_id: int, value: str,
+) -> Calendar | None:
+    """Organizer-controlled attendance confirmation lead times (hours) for a calendar."""
+    parse_hours(value)
+    calendar = await owned_calendar(session, owner_telegram_id, calendar_id)
+    if not calendar:
+        return None
+    calendar.confirmation_hours = value
+    occurrence_ids = select(EventOccurrence.id).join(Event).where(
+        Event.calendar_id == calendar_id,
+        Event.status == "active",
+        EventOccurrence.status == "active",
+        EventOccurrence.start_utc > utcnow(),
+    )
+    await session.execute(update(NotificationJob).where(
+        NotificationJob.occurrence_id.in_(occurrence_ids),
+        NotificationJob.state == "pending",
+        NotificationJob.kind.like(f"{JOB_KIND_CONFIRM}:%"),
+    ).values(state="obsolete"))
+    future = (await session.scalars(
+        select(EventOccurrence)
+        .options(selectinload(EventOccurrence.event))
+        .where(EventOccurrence.id.in_(occurrence_ids))
+    )).all()
+    subs = (await session.scalars(select(Subscription).where(
+        Subscription.calendar_id == calendar_id, Subscription.active.is_(True)))).all()
+    now = utcnow()
+    for occurrence in future:
+        for sub in subs:
+            for hour in confirmation_offsets(calendar):
+                scheduled = occurrence.start_utc - timedelta(hours=hour)
+                if scheduled >= now:
+                    session.add(NotificationJob(
+                        occurrence_id=occurrence.id, user_id=sub.user_id,
+                        kind=job_kind(JOB_KIND_CONFIRM, hour),
+                        occurrence_version=occurrence.version, scheduled_at=scheduled,
+                    ))
+    await session.commit()
+    return calendar

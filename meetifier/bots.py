@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import select
 
-from .config import Settings, format_timezone_offset
+from .config import Settings, format_timezone_offset, validate_timezone
 from .db import Calendar, Database, Event, EventOccurrence, GoogleCalendarLink, Subscription, User
 from .i18n import LOCALES, normalize_locale, t
 from .keyboards import (DT_IGNORE, DT_PREFIX, FLOW_BACK_DATA, FLOW_CANCEL_DATA, ORG_INPUT_BLOCKLIST,
@@ -26,13 +26,14 @@ from .google_sync import (adopt_google_calendar, authorization_url, create_oauth
 from .recurrence import RecurrenceRule, parse_local_naive
 from .service import (calendar_event_series, calendar_events, change_event, confirm_event, confirmations_for_event,
                       confirmed_occurrence_ids, create_calendar, create_events, display_time, event_occurrences,
-                      get_user_locale, invitation_calendar, make_invitation, set_locale, set_reminders,
-                      set_subscription_state, set_timezone, subscribe, upcoming_for_user_with_status)
-from .states import (OrganizerCancelEvent, OrganizerConfirmations, OrganizerEvents, OrganizerGoogleAdopt,
-                     OrganizerGoogleImport, OrganizerGoogleMap, OrganizerGoogleSync, OrganizerInvite,
-                     OrganizerNewCalendar, OrganizerNewEvent, OrganizerReschedule, ParticipantConfirmPick,
-                     ParticipantMute, ParticipantReminders, ParticipantTimezone, ParticipantUnmute,
-                     ParticipantUnsubscribe, ParticipantUpcoming)
+                      get_user_locale, invitation_calendar, make_invitation, set_confirmation_hours, set_locale,
+                      set_reminders, set_subscription_state, set_timezone, subscribe,
+                      upcoming_for_user_with_status)
+from .states import (OrganizerCancelEvent, OrganizerConfirmTiming, OrganizerConfirmations, OrganizerEvents,
+                     OrganizerGoogleAdopt, OrganizerGoogleImport, OrganizerGoogleMap, OrganizerGoogleSync,
+                     OrganizerInvite, OrganizerNewCalendar, OrganizerNewEvent, OrganizerReschedule,
+                     ParticipantConfirmPick, ParticipantMute, ParticipantReminders, ParticipantTimezone,
+                     ParticipantUnmute, ParticipantUnsubscribe, ParticipantUpcoming)
 
 
 def participant_display_name(user) -> str:
@@ -350,6 +351,22 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             await state.set_state(OrganizerNewCalendar.name)
             await state.update_data(name=None)
             await prompt_text(target, t(locale, "enter_calendar_name"), locale)
+        elif current == OrganizerNewCalendar.confirmation.state:
+            await state.set_state(OrganizerNewCalendar.timezone)
+            await state.update_data(timezone=None, confirmation_hours=None)
+            await prompt_text(target, t(locale, "enter_timezone"), locale)
+        elif current == OrganizerConfirmTiming.calendar.state:
+            await cancel()
+        elif current == OrganizerConfirmTiming.minutes.state:
+            await state.set_state(OrganizerConfirmTiming.calendar)
+            await state.update_data(calendar_id=None)
+            async with db.sessions() as session:
+                rows = await fetch_owned_calendars(session, uid)
+            await prompt_inline(
+                target, t(locale, "choose_calendar_confirm_timing"),
+                calendars_keyboard(rows, "o_confirm_timing", locale, show_back=False),
+                locale, with_reply_nav=isinstance(target, Message),
+            )
         elif current == OrganizerNewEvent.calendar.state:
             await cancel()
         elif current == OrganizerNewEvent.title.state:
@@ -636,9 +653,12 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         if command and command.args:
             await state.clear()
             try:
-                name, tz = split_args(command, 2, locale=locale)
+                parts = split_args(command, 2, 3, locale=locale)
+                name, tz = parts[0], parts[1]
+                confirm = parts[2] if len(parts) == 3 else None
                 async with db.sessions() as session:
-                    calendar = await create_calendar(session, message.from_user.id, name, tz, settings.default_timezone)
+                    calendar = await create_calendar(
+                        session, message.from_user.id, name, tz, settings.default_timezone, confirm)
                 await message.answer(
                     t(locale, "calendar_created", name=calendar.name, id=calendar.id),
                     reply_markup=organizer_main_menu(locale),
@@ -659,19 +679,85 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
 
     @router.message(OrganizerNewCalendar.timezone, ~F.text.in_(ORG_INPUT_BLOCKLIST))
     async def new_calendar_timezone(message: Message, state: FSMContext) -> None:
+        locale = await locale_for(message.from_user.id)
+        try:
+            validate_timezone(message.text.strip())
+        except ValueError as exc:
+            await flow_err(message, locale, exc, t(locale, "enter_timezone"))
+            return
+        await state.update_data(timezone=message.text.strip())
+        await state.set_state(OrganizerNewCalendar.confirmation)
+        await message.answer(t(locale, "enter_confirmation_hours"), reply_markup=flow_nav_keyboard(locale))
+
+    @router.message(OrganizerNewCalendar.confirmation, ~F.text.in_(ORG_INPUT_BLOCKLIST))
+    async def new_calendar_confirmation(message: Message, state: FSMContext) -> None:
         data = await state.get_data()
         locale = await locale_for(message.from_user.id)
         try:
             async with db.sessions() as session:
                 calendar = await create_calendar(
-                    session, message.from_user.id, data["name"], message.text.strip(), settings.default_timezone)
+                    session, message.from_user.id, data["name"], data["timezone"],
+                    settings.default_timezone, message.text.strip())
             await state.clear()
             await message.answer(
                 t(locale, "calendar_created", name=calendar.name, id=calendar.id),
                 reply_markup=organizer_main_menu(locale),
             )
         except (ValueError, PermissionError) as exc:
-            await flow_err(message, locale, exc, t(locale, "enter_timezone"))
+            await flow_err(message, locale, exc, t(locale, "enter_confirmation_hours"))
+
+    @router.message(Command("confirm_timing"))
+    @router.message(F.text.in_(org_texts("confirm_timing")))
+    async def confirm_timing_start(message: Message, state: FSMContext, command: CommandObject | None = None) -> None:
+        locale = await locale_for(message.from_user.id)
+        if command and command.args:
+            await state.clear()
+            try:
+                calendar_id, hours = split_args(command, 2, locale=locale)
+                async with db.sessions() as session:
+                    calendar = await set_confirmation_hours(
+                        session, message.from_user.id, int(calendar_id), hours)
+                if not calendar:
+                    raise PermissionError(t(locale, "calendar_not_owned"))
+                await message.answer(
+                    t(locale, "confirmation_timing_saved", hours=calendar.confirmation_hours),
+                    reply_markup=organizer_main_menu(locale),
+                )
+            except (ValueError, PermissionError) as exc:
+                detail = exc if str(exc) else t(locale, "usage_confirm_timing")
+                await err(message, locale, detail)
+            return
+        await state.clear()
+        await state.set_state(OrganizerConfirmTiming.calendar)
+        await pick_calendar(message, "o_confirm_timing", "choose_calendar_confirm_timing", locale)
+
+    @router.callback_query(F.data.startswith("o_confirm_timing:"))
+    async def confirm_timing_calendar(callback: CallbackQuery, state: FSMContext) -> None:
+        calendar_id = int(callback.data.split(":", 1)[1])
+        locale = await locale_for(callback.from_user.id)
+        await state.update_data(calendar_id=calendar_id)
+        await state.set_state(OrganizerConfirmTiming.minutes)
+        await callback.message.edit_text(t(locale, "enter_confirmation_hours"))
+        await callback.message.answer("\u2060", reply_markup=flow_nav_keyboard(locale))
+        await callback.answer()
+
+    @router.message(OrganizerConfirmTiming.minutes, ~F.text.in_(ORG_INPUT_BLOCKLIST))
+    async def confirm_timing_value(message: Message, state: FSMContext) -> None:
+        data = await state.get_data()
+        locale = await locale_for(message.from_user.id)
+        try:
+            async with db.sessions() as session:
+                calendar = await set_confirmation_hours(
+                    session, message.from_user.id, int(data["calendar_id"]), message.text.strip())
+            if not calendar:
+                raise PermissionError(t(locale, "calendar_not_owned"))
+            await state.clear()
+            await message.answer(
+                t(locale, "confirmation_timing_saved", hours=calendar.confirmation_hours),
+                reply_markup=organizer_main_menu(locale),
+            )
+        except (ValueError, PermissionError) as exc:
+            await flow_err(message, locale, exc, t(locale, "enter_confirmation_hours"))
 
     async def pick_calendar(
         message: Message, prefix: str, prompt_key: str, locale: str, *, show_back: bool = False,

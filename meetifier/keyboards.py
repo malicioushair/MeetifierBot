@@ -40,6 +40,7 @@ def organizer_main_menu(locale: str | None = None) -> ReplyKeyboardMarkup:
             [b("new_event"), b("events")],
             [b("invite"), b("reschedule")],
             [b("cancel_event"), b("confirmations")],
+            [b("confirm_timing")],
             [b("google_link"), b("google_map")],
             [b("google_import"), b("google_sync")],
             [b("google_adopt")],

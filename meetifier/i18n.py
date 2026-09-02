@@ -21,6 +21,7 @@ ORG_BTN = {
     "reschedule": {"en": "✏️ Reschedule", "ru": "✏️ Перенести", "sr": "✏️ Pomeri"},
     "cancel_event": {"en": "❌ Cancel event", "ru": "❌ Отменить событие", "sr": "❌ Otkaži događaj"},
     "confirmations": {"en": "✅ Confirmations", "ru": "✅ Подтверждения", "sr": "✅ Potvrde"},
+    "confirm_timing": {"en": "⏱ Attendance ask", "ru": "⏱ Запрос участия", "sr": "⏱ Zahtev prisustva"},
     "google_link": {"en": "🔗 Link Google", "ru": "🔗 Связать Google", "sr": "🔗 Poveži Google"},
     "google_map": {"en": "📎 Map to Google", "ru": "📎 Привязать к Google", "sr": "📎 Mapiraj na Google"},
     "google_import": {"en": "⬇️ Import Google", "ru": "⬇️ Импорт Google", "sr": "⬇️ Uvoz Google"},
@@ -35,7 +36,7 @@ PAR_BTN = {
     "confirm": {"en": "✅ Confirm", "ru": "✅ Подтвердить", "sr": "✅ Potvrdi"},
     "subscriptions": {"en": "📋 Subscriptions", "ru": "📋 Подписки", "sr": "📋 Pretplate"},
     "timezone": {"en": "🌍 Timezone", "ru": "🌍 Часовой пояс", "sr": "🌍 Vremenska zona"},
-    "reminders": {"en": "⏰ Reminders", "ru": "⏰ Напоминания", "sr": "⏰ Podsetnici"},
+    "reminders": {"en": "⏰ Notifications", "ru": "⏰ Уведомления", "sr": "⏰ Obaveštenja"},
     "mute": {"en": "🔇 Mute", "ru": "🔇 Без звука", "sr": "🔇 Isključi"},
     "unmute": {"en": "🔊 Unmute", "ru": "🔊 Включить звук", "sr": "🔊 Uključi"},
     "unsubscribe": {"en": "🚫 Unsubscribe", "ru": "🚫 Отписаться", "sr": "🚫 Otkaži pretplatu"},
@@ -57,17 +58,18 @@ MESSAGES: dict[str, dict[str, str]] = {
             "1. Create a calendar\n"
             "2. Add events\n"
             "3. Send an invite link\n"
-            "4. Participants subscribe in the Participant Bot and get reminders\n"
+            "4. Participants subscribe in the Participant Bot\n"
             "5. Reschedule or cancel when plans change; check confirmations\n\n"
             "Menu features\n"
             "📅 Calendars — list your calendars\n"
-            "➕ New calendar — name + UTC offset hours (e.g. 1 for UTC+1)\n"
+            "➕ New calendar — name + UTC offset + when to ask for attendance (default 24h)\n"
             "➕ New event — title, start, duration, recurrence (once / weekly / monthly)\n"
             "📋 Events — next event or this week\n"
             "🔗 Invite — share a Telegram link so people can subscribe\n"
             "✏️ Reschedule — pick an event and set a new start time\n"
             "❌ Cancel event — cancel and notify subscribers\n"
             "✅ Confirmations — who confirmed attendance\n"
+            "⏱ Attendance ask — when participants are asked to confirm (default 24h before)\n"
             "🔗 Link Google / 📎 Map / ⬇️ Import / 🔄 Sync / 📣 Invite Google guests — optional Google Calendar sync\n"
             "🌐 Language — switch en / ru / sr\n"
             "❓ Help — command examples\n\n"
@@ -77,20 +79,20 @@ MESSAGES: dict[str, dict[str, str]] = {
             "Typical flow\n"
             "1. Open an invite link from an organizer (or tap Subscribe)\n"
             "2. Set your UTC offset in hours (e.g. 1 for UTC+1)\n"
-            "3. Optionally set reminder times per calendar\n"
-            "4. Check upcoming events and confirm attendance\n"
+            "3. Optionally set personal notification times per calendar (default 1h before)\n"
+            "4. Check upcoming events and confirm attendance when asked\n"
             "5. Mute or unsubscribe when you no longer need a calendar\n\n"
             "Menu features\n"
             "📅 Upcoming — next event or this week\n"
             "✅ Confirm — mark that you will attend\n"
             "📋 Subscriptions — calendars you follow\n"
             "🌍 Timezone — UTC offset in hours used for how times are shown to you\n"
-            "⏰ Reminders — minutes before the event (e.g. 1440,30 = 1 day and 30 min)\n"
-            "🔇 Mute / 🔊 Unmute — pause or resume reminders for a calendar\n"
+            "⏰ Notifications — your personal heads-up before events (default 60 min; organizer does not see this)\n"
+            "🔇 Mute / 🔊 Unmute — pause or resume your personal notifications\n"
             "🚫 Unsubscribe — leave a calendar and stop jobs\n"
             "🌐 Language — switch en / ru / sr\n"
             "❓ Help — command examples\n\n"
-            "You must Start this bot before Telegram can deliver reminders."
+            "You must Start this bot before Telegram can deliver messages."
         ),
         "choose_language": "Choose your language:",
         "language_updated": "Language updated.",
@@ -109,6 +111,13 @@ MESSAGES: dict[str, dict[str, str]] = {
         "calendar_created": "Calendar created: {name} (ID {id})",
         "enter_calendar_name": "Enter calendar name:",
         "enter_timezone": "Enter UTC offset in hours (e.g. 3 for UTC+3, -5 for UTC-5):",
+        "enter_confirmation_hours": (
+            "When should participants be asked to confirm attendance? "
+            "Hours before the event (default 24). Comma-separated allowed:"
+        ),
+        "choose_calendar_confirm_timing": "Choose a calendar to set attendance-ask timing:",
+        "confirmation_timing_saved": "Attendance-ask timing saved: {hours} h before each event.",
+        "usage_confirm_timing": "Usage: /confirm_timing CALENDAR_ID 24",
         "what_to_see": "What would you like to see?",
         "choose_calendar": "Choose a calendar:",
         "choose_calendar_invite": "Choose a calendar to invite to:",
@@ -233,7 +242,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "heading_event_rescheduled": "Event rescheduled",
         "heading_event_cancelled": "Event cancelled",
         "notify_event": "{heading}: {title}\n{time}\nCalendar: {calendar}",
-        "reminder": "Reminder ({minutes} min): {title}\n{time}\nCalendar: {calendar}",
+        "reminder": "Notification ({minutes} min): {title}\n{time}\nCalendar: {calendar}",
+        "confirm_request": (
+            "Please confirm attendance ({hours} h before):\n{title}\n{time}\nCalendar: {calendar}"
+        ),
         "organizer_confirmed": (
             "✅ {name} confirmed attendance:\n{title}\n{time}\nCalendar: {calendar}"
         ),
@@ -254,19 +266,22 @@ MESSAGES: dict[str, dict[str, str]] = {
         "choose_mute": "Choose a calendar to mute:",
         "choose_unmute": "Choose a calendar to unmute:",
         "choose_unsubscribe": "Choose a calendar to unsubscribe from:",
-        "choose_reminders": "Choose a calendar:",
+        "choose_reminders": "Choose a calendar for your personal notifications:",
         "updated": "Updated.",
         "subscription_not_found": "Subscription not found.",
         "usage_action": "Usage: /{action} CALENDAR_ID",
         "muted": "Muted.",
         "unmuted": "Unmuted.",
         "unsubscribed": "Unsubscribed.",
-        "reminders_saved": "Reminder preference saved for future jobs.",
-        "enter_reminders": "Enter reminder minutes (comma-separated, e.g. 1440,30):",
-        "usage_reminders": "Usage: /reminders CALENDAR_ID 1440,30",
+        "reminders_saved": "Personal notification preference saved.",
+        "enter_reminders": (
+            "Enter your personal notification minutes before the event "
+            "(comma-separated, default is 60). Example: 60 or 120,30:"
+        ),
+        "usage_reminders": "Usage: /reminders CALENDAR_ID 60",
         "org.help": (
             "Use the menu buttons below, or type commands directly:\n\n"
-            "/newcalendar Name | 3\n"
+            "/newcalendar Name | 3 [| 24]\n"
             "/calendars\n"
             "/newevent CALENDAR_ID | Title | 2026-09-01 18:30 | DURATION_MINUTES | WEEKS\n            (WEEKS kept for simple weekly; use the menu for Mon+Wed, every 2nd week, first Tuesday, …)\n"
             "/events CALENDAR_ID [next|week]\n"
@@ -274,17 +289,18 @@ MESSAGES: dict[str, dict[str, str]] = {
             "/reschedule EVENT_ID | 2026-09-02 19:00\n"
             "/cancel EVENT_ID\n"
             "/confirmations CALENDAR_ID\n"
+            "/confirm_timing CALENDAR_ID 24\n"
             "/language\n\n"
             "Google (optional): Link Google, then import a filled calendar or map an existing Meetifier calendar.\n"
             "Mapped calendars sync both ways. Use Invite Google guests to add the participant-bot link to upcoming events.\n\n"
-            "Use WEEKS=1 for one-time events or 2..52 for weekly recurrence."
+            "Attendance ask (⏱) is organizer-controlled (default 24h). Participant notifications are private to each subscriber."
         ),
         "par.help": (
             "Use the menu buttons below, or type commands directly:\n\n"
             "/upcoming [next|week] - upcoming events\n"
             "/confirm EVENT_ID - confirm attendance\n"
             "/timezone 3\n"
-            "/reminders CALENDAR_ID 1440,30\n"
+            "/reminders CALENDAR_ID 60\n"
             "/mute CALENDAR_ID\n"
             "/unmute CALENDAR_ID\n"
             "/unsubscribe CALENDAR_ID\n"
@@ -299,6 +315,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "cmd.help": "Show help",
         "cmd.upcoming": "Upcoming events",
         "cmd.confirm": "Confirm attendance",
+        "cmd.confirm_timing": "Attendance ask timing",
         "cmd.subscriptions": "My calendars",
         "cmd.language": "Change language",
     },
@@ -310,17 +327,18 @@ MESSAGES: dict[str, dict[str, str]] = {
             "1. Создайте календарь\n"
             "2. Добавьте события\n"
             "3. Отправьте ссылку-приглашение\n"
-            "4. Участники подписываются в Participant Bot и получают напоминания\n"
+            "4. Участники подписываются в Participant Bot\n"
             "5. Переносите или отменяйте события; смотрите подтверждения\n\n"
             "Кнопки меню\n"
             "📅 Календари — список ваших календарей\n"
-            "➕ Новый календарь — название и смещение UTC в часах (например 3 для UTC+3)\n"
+            "➕ Новый календарь — название, смещение UTC и когда спрашивать об участии (по умолчанию 24 ч)\n"
             "➕ Новое событие — название, время начала, длительность, недели (1 — разово, 2–52 — еженедельно)\n"
             "📋 События — следующее или на этой неделе\n"
             "🔗 Пригласить — ссылка в Telegram для подписки\n"
             "✏️ Перенести — выбрать событие и новое время\n"
             "❌ Отменить событие — отмена и уведомление подписчиков\n"
             "✅ Подтверждения — кто подтвердил участие\n"
+            "⏱ Запрос участия — когда спрашивать подтверждение (по умолчанию за 24 ч)\n"
             "🔗 Связать Google / 📎 Привязать / ⬇️ Импорт / 🔄 Синхронизация / 📣 Пригласить гостей Google — опциональный синк\n"
             "🌐 Язык — en / ru / sr\n"
             "❓ Помощь — примеры команд\n\n"
@@ -330,20 +348,20 @@ MESSAGES: dict[str, dict[str, str]] = {
             "Обычный сценарий\n"
             "1. Откройте ссылку от организатора (или нажмите Подписаться)\n"
             "2. Укажите смещение UTC в часах (например 3 для UTC+3)\n"
-            "3. При желании настройте напоминания для календаря\n"
-            "4. Смотрите ближайшие события и подтверждайте участие\n"
+            "3. При желании настройте личные уведомления (по умолчанию за 1 ч)\n"
+            "4. Смотрите ближайшие события и подтверждайте участие по запросу\n"
             "5. Отключайте звук или отписывайтесь, когда календарь больше не нужен\n\n"
             "Кнопки меню\n"
             "📅 Ближайшие — следующее событие или эта неделя\n"
             "✅ Подтвердить — отметить, что вы придёте\n"
             "📋 Подписки — календари, на которые вы подписаны\n"
             "🌍 Часовой пояс — смещение UTC в часах для отображения времени\n"
-            "⏰ Напоминания — минуты до события (например 1440,30 = день и 30 мин)\n"
-            "🔇 Без звука / 🔊 Включить звук — пауза или возобновление напоминаний\n"
+            "⏰ Уведомления — ваши личные напоминания до события (по умолчанию 60 мин; организатор их не видит)\n"
+            "🔇 Без звука / 🔊 Включить звук — пауза или возобновление личных уведомлений\n"
             "🚫 Отписаться — уйти с календаря и остановить задачи\n"
             "🌐 Язык — en / ru / sr\n"
             "❓ Помощь — примеры команд\n\n"
-            "Нужно нажать Start в этом боте, иначе Telegram не доставит напоминания."
+            "Нужно нажать Start в этом боте, иначе Telegram не доставит сообщения."
         ),
         "choose_language": "Выберите язык:",
         "language_updated": "Язык обновлён.",
@@ -362,6 +380,13 @@ MESSAGES: dict[str, dict[str, str]] = {
         "calendar_created": "Календарь создан: {name} (ID {id})",
         "enter_calendar_name": "Введите название календаря:",
         "enter_timezone": "Введите смещение UTC в часах (например 3 для UTC+3, -5 для UTC-5):",
+        "enter_confirmation_hours": (
+            "Когда спрашивать участников о подтверждении участия? "
+            "Часы до события (по умолчанию 24). Можно через запятую:"
+        ),
+        "choose_calendar_confirm_timing": "Выберите календарь для настройки запроса участия:",
+        "confirmation_timing_saved": "Запрос участия сохранён: за {hours} ч до каждого события.",
+        "usage_confirm_timing": "Использование: /confirm_timing CALENDAR_ID 24",
         "what_to_see": "Что показать?",
         "choose_calendar": "Выберите календарь:",
         "choose_calendar_invite": "Выберите календарь для приглашения:",
@@ -486,7 +511,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "heading_event_rescheduled": "Событие перенесено",
         "heading_event_cancelled": "Событие отменено",
         "notify_event": "{heading}: {title}\n{time}\nКалендарь: {calendar}",
-        "reminder": "Напоминание ({minutes} мин): {title}\n{time}\nКалендарь: {calendar}",
+        "reminder": "Уведомление ({minutes} мин): {title}\n{time}\nКалендарь: {calendar}",
+        "confirm_request": (
+            "Подтвердите участие (за {hours} ч):\n{title}\n{time}\nКалендарь: {calendar}"
+        ),
         "organizer_confirmed": (
             "✅ {name} подтвердил(а) участие:\n{title}\n{time}\nКалендарь: {calendar}"
         ),
@@ -507,19 +535,22 @@ MESSAGES: dict[str, dict[str, str]] = {
         "choose_mute": "Выберите календарь для отключения уведомлений:",
         "choose_unmute": "Выберите календарь для включения уведомлений:",
         "choose_unsubscribe": "Выберите календарь для отписки:",
-        "choose_reminders": "Выберите календарь:",
+        "choose_reminders": "Выберите календарь для личных уведомлений:",
         "updated": "Обновлено.",
         "subscription_not_found": "Подписка не найдена.",
         "usage_action": "Использование: /{action} CALENDAR_ID",
         "muted": "Уведомления отключены.",
         "unmuted": "Уведомления включены.",
         "unsubscribed": "Вы отписались.",
-        "reminders_saved": "Настройки напоминаний сохранены для будущих задач.",
-        "enter_reminders": "Введите минуты напоминаний через запятую (например 1440,30):",
-        "usage_reminders": "Использование: /reminders CALENDAR_ID 1440,30",
+        "reminders_saved": "Личные уведомления сохранены.",
+        "enter_reminders": (
+            "Введите минуты до события для личных уведомлений "
+            "(через запятую, по умолчанию 60). Пример: 60 или 120,30:"
+        ),
+        "usage_reminders": "Использование: /reminders CALENDAR_ID 60",
         "org.help": (
             "Используйте кнопки меню ниже или команды:\n\n"
-            "/newcalendar Название | 3\n"
+            "/newcalendar Название | 3 [| 24]\n"
             "/calendars\n"
             "/newevent CALENDAR_ID | Название | 2026-09-01 18:30 | МИНУТЫ | НЕДЕЛИ\n"
             "/events CALENDAR_ID [next|week]\n"
@@ -527,17 +558,18 @@ MESSAGES: dict[str, dict[str, str]] = {
             "/reschedule EVENT_ID | 2026-09-02 19:00\n"
             "/cancel EVENT_ID\n"
             "/confirmations CALENDAR_ID\n"
+            "/confirm_timing CALENDAR_ID 24\n"
             "/language\n\n"
             "Google (опционально): свяжите Google, затем импортируйте календарь или привяжите существующий.\n"
             "Привязанные календари синхронизируются в обе стороны.\n\n"
-            "НЕДЕЛИ=1 — разовое событие, 2..52 — еженедельно."
+            "Запрос участия (⏱) настраивает организатор (по умолчанию 24 ч). Личные уведомления участников ему недоступны."
         ),
         "par.help": (
             "Используйте кнопки меню ниже или команды:\n\n"
             "/upcoming [next|week] — ближайшие события\n"
             "/confirm EVENT_ID — подтвердить участие\n"
             "/timezone 3\n"
-            "/reminders CALENDAR_ID 1440,30\n"
+            "/reminders CALENDAR_ID 60\n"
             "/mute CALENDAR_ID\n"
             "/unmute CALENDAR_ID\n"
             "/unsubscribe CALENDAR_ID\n"
@@ -552,6 +584,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "cmd.help": "Помощь",
         "cmd.upcoming": "Ближайшие события",
         "cmd.confirm": "Подтвердить участие",
+        "cmd.confirm_timing": "Запрос участия",
         "cmd.subscriptions": "Мои календари",
         "cmd.language": "Сменить язык",
     },
@@ -563,17 +596,18 @@ MESSAGES: dict[str, dict[str, str]] = {
             "1. Napravite kalendar\n"
             "2. Dodajte događaje\n"
             "3. Pošaljite link pozivnice\n"
-            "4. Učesnici se pretplate u Participant Bot-u i dobijaju podsetnike\n"
+            "4. Učesnici se pretplate u Participant Bot-u\n"
             "5. Pomerite ili otkažite događaje; proverite potvrde\n\n"
             "Funkcije menija\n"
             "📅 Kalendari — lista vaših kalendara\n"
-            "➕ Novi kalendar — naziv i UTC pomeraj u satima (npr. 1 za UTC+1)\n"
+            "➕ Novi kalendar — naziv, UTC pomeraj i kada tražiti potvrdu prisustva (podrazumevano 24h)\n"
             "➕ Novi događaj — naslov, vreme početka, trajanje, nedelje (1 jednokratno, 2–52 nedeljno)\n"
             "📋 Događaji — sledeći ili ova nedelja\n"
             "🔗 Pozovi — Telegram link za pretplatu\n"
             "✏️ Pomeri — izaberite događaj i novo vreme\n"
             "❌ Otkaži događaj — otkazivanje i obaveštavanje pretplatnika\n"
             "✅ Potvrde — ko je potvrdio prisustvo\n"
+            "⏱ Zahtev prisustva — kada učesnici dobijaju zahtev za potvrdu (podrazumevano 24h pre)\n"
             "🔗 Poveži Google / 📎 Mapiraj / ⬇️ Uvoz / 🔄 Sinhronizuj / 📣 Pozovi Google goste — opciona Google sinhronizacija\n"
             "🌐 Jezik — en / ru / sr\n"
             "❓ Pomoć — primeri komandi\n\n"
@@ -583,20 +617,20 @@ MESSAGES: dict[str, dict[str, str]] = {
             "Uobičajeni tok\n"
             "1. Otvorite link od organizatora (ili dodirnite Pretplati se)\n"
             "2. Podesite UTC pomeraj u satima (npr. 1 za UTC+1)\n"
-            "3. Po želji podesite podsetnike po kalendaru\n"
-            "4. Pregledajte predstojeće događaje i potvrdite prisustvo\n"
+            "3. Po želji podesite lična obaveštenja (podrazumevano 1h pre)\n"
+            "4. Pregledajte predstojeće događaje i potvrdite prisustvo kada vas pitaju\n"
             "5. Isključite obaveštenja ili otkažite pretplatu kad kalendar više nije potreban\n\n"
             "Funkcije menija\n"
             "📅 Predstojeći — sledeći događaj ili ova nedelja\n"
             "✅ Potvrdi — označite da ćete doći\n"
             "📋 Pretplate — kalendari koje pratite\n"
             "🌍 Vremenska zona — UTC pomeraj u satima za prikaz vremena\n"
-            "⏰ Podsetnici — minuti pre događaja (npr. 1440,30 = 1 dan i 30 min)\n"
-            "🔇 Isključi / 🔊 Uključi — pauza ili nastavak podsetnika\n"
+            "⏰ Obaveštenja — vaša lična podsetanja pre događaja (podrazumevano 60 min; organizator ih ne vidi)\n"
+            "🔇 Isključi / 🔊 Uključi — pauza ili nastavak ličnih obaveštenja\n"
             "🚫 Otkaži pretplatu — napustite kalendar i zaustavite poslove\n"
             "🌐 Jezik — en / ru / sr\n"
             "❓ Pomoć — primeri komandi\n\n"
-            "Morate pokrenuti ovaj bot (Start) da bi Telegram mogao da šalje podsetnike."
+            "Morate pokrenuti ovaj bot (Start) da bi Telegram mogao da šalje poruke."
         ),
         "choose_language": "Izaberite jezik:",
         "language_updated": "Jezik je ažuriran.",
@@ -615,6 +649,13 @@ MESSAGES: dict[str, dict[str, str]] = {
         "calendar_created": "Kalendar kreiran: {name} (ID {id})",
         "enter_calendar_name": "Unesite naziv kalendara:",
         "enter_timezone": "Unesite UTC pomeraj u satima (npr. 1 za UTC+1, -5 za UTC-5):",
+        "enter_confirmation_hours": (
+            "Kada pitati učesnike da potvrde prisustvo? "
+            "Sati pre događaja (podrazumevano 24). Dozvoljeno više vrednosti odvojenih zarezom:"
+        ),
+        "choose_calendar_confirm_timing": "Izaberite kalendar za podešavanje zahteva prisustva:",
+        "confirmation_timing_saved": "Zahtev prisustva sačuvan: {hours} h pre svakog događaja.",
+        "usage_confirm_timing": "Upotreba: /confirm_timing CALENDAR_ID 24",
         "what_to_see": "Šta želite da vidite?",
         "choose_calendar": "Izaberite kalendar:",
         "choose_calendar_invite": "Izaberite kalendar za pozivnicu:",
@@ -739,7 +780,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "heading_event_rescheduled": "Događaj pomeren",
         "heading_event_cancelled": "Događaj otkazan",
         "notify_event": "{heading}: {title}\n{time}\nKalendar: {calendar}",
-        "reminder": "Podsetnik ({minutes} min): {title}\n{time}\nKalendar: {calendar}",
+        "reminder": "Obaveštenje ({minutes} min): {title}\n{time}\nKalendar: {calendar}",
+        "confirm_request": (
+            "Molimo potvrdite prisustvo ({hours} h pre):\n{title}\n{time}\nKalendar: {calendar}"
+        ),
         "organizer_confirmed": (
             "✅ {name} je potvrdio/la prisustvo:\n{title}\n{time}\nKalendar: {calendar}"
         ),
@@ -760,19 +804,22 @@ MESSAGES: dict[str, dict[str, str]] = {
         "choose_mute": "Izaberite kalendar za isključivanje obaveštenja:",
         "choose_unmute": "Izaberite kalendar za uključivanje obaveštenja:",
         "choose_unsubscribe": "Izaberite kalendar za otkazivanje pretplate:",
-        "choose_reminders": "Izaberite kalendar:",
+        "choose_reminders": "Izaberite kalendar za lična obaveštenja:",
         "updated": "Ažurirano.",
         "subscription_not_found": "Pretplata nije pronađena.",
         "usage_action": "Upotreba: /{action} CALENDAR_ID",
         "muted": "Obaveštenja isključena.",
         "unmuted": "Obaveštenja uključena.",
         "unsubscribed": "Pretplata otkazana.",
-        "reminders_saved": "Podešavanje podsetnika sačuvano za buduće poslove.",
-        "enter_reminders": "Unesite minute podsetnika odvojene zarezom (npr. 1440,30):",
-        "usage_reminders": "Upotreba: /reminders CALENDAR_ID 1440,30",
+        "reminders_saved": "Lična obaveštenja sačuvana.",
+        "enter_reminders": (
+            "Unesite minute pre događaja za lična obaveštenja "
+            "(odvojene zarezom, podrazumevano 60). Primer: 60 ili 120,30:"
+        ),
+        "usage_reminders": "Upotreba: /reminders CALENDAR_ID 60",
         "org.help": (
             "Koristite dugmad menija ispod ili komande:\n\n"
-            "/newcalendar Naziv | 1\n"
+            "/newcalendar Naziv | 1 [| 24]\n"
             "/calendars\n"
             "/newevent CALENDAR_ID | Naslov | 2026-09-01 18:30 | MINUTI | NEDELJE\n"
             "/events CALENDAR_ID [next|week]\n"
@@ -780,17 +827,18 @@ MESSAGES: dict[str, dict[str, str]] = {
             "/reschedule EVENT_ID | 2026-09-02 19:00\n"
             "/cancel EVENT_ID\n"
             "/confirmations CALENDAR_ID\n"
+            "/confirm_timing CALENDAR_ID 24\n"
             "/language\n\n"
             "Google (opciono): povežite Google, zatim uvezite ili mapirajte kalendar.\n"
             "Mapirani kalendari se sinhronizuju u oba smera.\n\n"
-            "NEDELJE=1 jednokratno, 2..52 nedeljno."
+            "Zahtev prisustva (⏱) podešava organizator (podrazumevano 24h). Lična obaveštenja učesnika su privatna."
         ),
         "par.help": (
             "Koristite dugmad menija ispod ili komande:\n\n"
             "/upcoming [next|week] - predstojeći događaji\n"
             "/confirm EVENT_ID - potvrdi prisustvo\n"
             "/timezone 1\n"
-            "/reminders CALENDAR_ID 1440,30\n"
+            "/reminders CALENDAR_ID 60\n"
             "/mute CALENDAR_ID\n"
             "/unmute CALENDAR_ID\n"
             "/unsubscribe CALENDAR_ID\n"
@@ -805,6 +853,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "cmd.help": "Pomoć",
         "cmd.upcoming": "Predstojeći događaji",
         "cmd.confirm": "Potvrdi prisustvo",
+        "cmd.confirm_timing": "Zahtev prisustva",
         "cmd.subscriptions": "Moji kalendari",
         "cmd.language": "Promeni jezik",
     },
