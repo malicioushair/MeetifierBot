@@ -192,6 +192,11 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
     async def err(message: Message, locale: str, exc: Exception) -> None:
         await message.answer(t(locale, "error", error=exc), reply_markup=organizer_main_menu(locale))
 
+    async def flow_err(message: Message, locale: str, exc: Exception, retry_prompt: str) -> None:
+        """Show an error but keep the current FSM step so the user can retry."""
+        await message.answer(t(locale, "error", error=exc))
+        await message.answer(retry_prompt, reply_markup=flow_nav_keyboard(locale))
+
     async def restore_menu(target: Message | CallbackQuery, locale: str, text: str | None = None) -> None:
         msg = target.message if isinstance(target, CallbackQuery) else target
         await msg.answer(text or t(locale, "main_menu"), reply_markup=organizer_main_menu(locale))
@@ -603,13 +608,13 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             async with db.sessions() as session:
                 calendar = await create_calendar(
                     session, message.from_user.id, data["name"], message.text.strip(), settings.default_timezone)
+            await state.clear()
             await message.answer(
                 t(locale, "calendar_created", name=calendar.name, id=calendar.id),
                 reply_markup=organizer_main_menu(locale),
             )
         except (ValueError, PermissionError) as exc:
-            await err(message, locale, exc)
-        await state.clear()
+            await flow_err(message, locale, exc, t(locale, "enter_timezone"))
 
     async def pick_calendar(
         message: Message, prefix: str, prompt_key: str, locale: str, *, show_back: bool = False,
@@ -812,12 +817,16 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                     session, callback.from_user.id, int(calendar_id),
                     chosen["id"], chosen["name"])
             result = await sync_google_calendar(db, settings, int(calendar_id), force_full=True)
+            await state.clear()
             await callback.message.edit_text(
                 t(locale, "google_mapped", name=chosen["name"], created=result.created, updated=result.updated))
+            await restore_menu(callback, locale)
         except Exception as exc:
-            await callback.message.edit_text(t(locale, "error", error=exc))
-        await state.clear()
-        await restore_menu(callback, locale)
+            await callback.message.answer(t(locale, "error", error=exc))
+            await callback.message.answer(
+                t(locale, "google_choose"),
+                reply_markup=google_calendars_keyboard(len(calendars_list), locale),
+            )
         await callback.answer()
 
     @router.message(Command("googleimport"))
@@ -867,14 +876,19 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         try:
             calendar, result = await import_google_calendar(
                 db, settings, callback.from_user.id, chosen)
+            await state.clear()
             await callback.message.edit_text(
                 t(locale, "google_imported", name=chosen["name"], id=calendar.id,
                   created=result.created, updated=result.updated, cancelled=result.cancelled)
             )
+            await restore_menu(callback, locale)
         except Exception as exc:
-            await callback.message.edit_text(t(locale, "google_import_failed", error=exc))
-        await state.clear()
-        await restore_menu(callback, locale)
+            names = "\n".join(f"{i + 1}. {calendar['name']}" for i, calendar in enumerate(google_cals[:10]))
+            await callback.message.answer(t(locale, "google_import_failed", error=exc))
+            await callback.message.answer(
+                t(locale, "google_choose_import", names=names),
+                reply_markup=google_calendars_keyboard(len(google_cals), locale, "o_gimport_pick"),
+            )
         await callback.answer()
 
     async def fetch_linked_calendars(telegram_id: int) -> list[Calendar]:
@@ -915,19 +929,28 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
     async def google_sync_pick(callback: CallbackQuery, state: FSMContext) -> None:
         calendar_id = int(callback.data.split(":", 1)[1])
         locale = await locale_for(callback.from_user.id)
-        owned = {calendar.id for calendar in await fetch_linked_calendars(callback.from_user.id)}
+        calendars = await fetch_linked_calendars(callback.from_user.id)
+        owned = {calendar.id for calendar in calendars}
         if calendar_id not in owned:
-            await callback.message.edit_text(t(locale, "calendar_not_owned"))
+            await callback.message.answer(t(locale, "calendar_not_owned"))
+            await callback.message.answer(
+                t(locale, "choose_calendar_sync"),
+                reply_markup=calendars_keyboard(calendars, "o_gsync", locale),
+            )
         else:
             try:
                 result = await sync_google_calendar(db, settings, calendar_id)
+                await state.clear()
                 await callback.message.edit_text(
                     t(locale, "google_sync_complete", created=result.created, updated=result.updated,
                       cancelled=result.cancelled))
+                await restore_menu(callback, locale)
             except Exception as exc:
-                await callback.message.edit_text(t(locale, "google_sync_failed", error=exc))
-        await state.clear()
-        await restore_menu(callback, locale)
+                await callback.message.answer(t(locale, "google_sync_failed", error=exc))
+                await callback.message.answer(
+                    t(locale, "choose_calendar_sync"),
+                    reply_markup=calendars_keyboard(calendars, "o_gsync", locale),
+                )
         await callback.answer()
 
     @router.message(Command("googleinvite"))
@@ -982,13 +1005,20 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         try:
             updated, total, invitation_url = await adopt_google_calendar(
                 db, settings, callback.from_user.id, calendar_id, settings.participant_bot_username)
+            await state.clear()
             await callback.message.edit_text(
                 t(locale, "google_adopt_done", updated=updated, total=total, url=invitation_url)
             )
+            await restore_menu(callback, locale)
         except Exception as exc:
-            await callback.message.edit_text(t(locale, "google_adopt_failed", error=exc))
-        await state.clear()
-        await restore_menu(callback, locale)
+            owned = {c.id: c for c in await fetch_linked_calendars(callback.from_user.id)}
+            calendar = owned.get(calendar_id)
+            await callback.message.answer(t(locale, "google_adopt_failed", error=exc))
+            if calendar:
+                await callback.message.answer(
+                    t(locale, "google_adopt_confirm_short", name=calendar.name),
+                    reply_markup=confirm_google_adoption_keyboard(calendar_id, locale),
+                )
         await callback.answer()
 
     @router.callback_query(F.data == "o_gadopt_no")
@@ -1022,11 +1052,17 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             async with db.sessions() as session:
                 invitation = await make_invitation(session, callback.from_user.id, calendar_id)
             url = f"https://t.me/{settings.participant_bot_username}?start={invitation.token}"
+            await state.clear()
             await callback.message.edit_text(t(locale, "share_invite", url=url))
+            await restore_menu(callback, locale)
         except (ValueError, PermissionError) as exc:
-            await callback.message.edit_text(t(locale, "error", error=exc))
-        await state.clear()
-        await restore_menu(callback, locale)
+            async with db.sessions() as session:
+                rows = await fetch_owned_calendars(session, callback.from_user.id)
+            await callback.message.answer(t(locale, "error", error=exc))
+            await callback.message.answer(
+                t(locale, "choose_calendar_invite"),
+                reply_markup=calendars_keyboard(rows, "o_invite", locale),
+            )
         await callback.answer()
 
     @router.message(Command("newevent"))
@@ -1075,16 +1111,28 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
 
     @router.message(OrganizerNewEvent.start, ~F.text.in_(ORG_INPUT_BLOCKLIST))
     async def new_event_start_time(message: Message, state: FSMContext) -> None:
+        locale = await locale_for(message.from_user.id)
+        try:
+            parse_local_naive(message.text.strip())
+        except ValueError as exc:
+            await flow_err(message, locale, exc, t(locale, "enter_start_time"))
+            return
         await state.update_data(start=message.text.strip())
         await state.set_state(OrganizerNewEvent.duration)
-        locale = await locale_for(message.from_user.id)
         await message.answer(t(locale, "enter_duration"), reply_markup=flow_nav_keyboard(locale))
 
     @router.message(OrganizerNewEvent.duration, ~F.text.in_(ORG_INPUT_BLOCKLIST))
     async def new_event_duration(message: Message, state: FSMContext) -> None:
-        await state.update_data(duration=message.text.strip())
-        await state.set_state(OrganizerNewEvent.pattern)
         locale = await locale_for(message.from_user.id)
+        try:
+            duration = int(message.text.strip())
+            if not 1 <= duration <= 10080:
+                raise ValueError("Duration must be 1..10080 minutes")
+        except ValueError as exc:
+            await flow_err(message, locale, exc, t(locale, "enter_duration"))
+            return
+        await state.update_data(duration=str(duration))
+        await state.set_state(OrganizerNewEvent.pattern)
         await prompt_inline(
             message, t(locale, "choose_pattern"), recurrence_pattern_keyboard(locale), locale, with_reply_nav=True,
         )
@@ -1104,6 +1152,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 locale, "events_created", count=len(occurrences),
                 ids=", ".join(str(o.id) for o in occurrences),
             )
+            await state.clear()
             if isinstance(message_or_cb, CallbackQuery):
                 await message_or_cb.message.edit_text(text)
                 await restore_menu(message_or_cb, locale)
@@ -1111,13 +1160,23 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             else:
                 await target_message.answer(text, reply_markup=organizer_main_menu(locale))
         except (ValueError, PermissionError) as exc:
+            current = await state.get_state()
+            if current == OrganizerNewEvent.count.state:
+                retry = t(locale, "enter_occurrence_count")
+            elif current == OrganizerNewEvent.pattern.state or data.get("pattern") == "once":
+                retry = t(locale, "choose_pattern")
+            else:
+                retry = t(locale, "try_again")
             if isinstance(message_or_cb, CallbackQuery):
-                await message_or_cb.message.edit_text(t(locale, "error", error=exc))
-                await restore_menu(message_or_cb, locale)
+                await message_or_cb.message.answer(t(locale, "error", error=exc))
+                if data.get("pattern") == "once":
+                    await message_or_cb.message.answer(
+                        t(locale, "choose_pattern"), reply_markup=recurrence_pattern_keyboard(locale))
+                else:
+                    await message_or_cb.message.answer(retry, reply_markup=flow_nav_keyboard(locale))
                 await message_or_cb.answer()
             else:
-                await err(target_message, locale, exc)
-        await state.clear()
+                await flow_err(target_message, locale, exc, retry)
 
     @router.callback_query(F.data.startswith("o_pat:"))
     async def new_event_pattern(callback: CallbackQuery, state: FSMContext) -> None:
@@ -1177,7 +1236,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             if not 1 <= interval <= 12:
                 raise ValueError("Interval must be 1..12")
         except ValueError as exc:
-            await err(message, locale, exc)
+            await flow_err(message, locale, exc, t(locale, "enter_interval_weeks"))
             return
         await state.update_data(interval=interval)
         await state.set_state(OrganizerNewEvent.count)
@@ -1219,8 +1278,8 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                     weekday=int(data["monthly_weekday"]), bysetpos=int(data["monthly_pos"]), count=count)
             await finish_new_event(message, state, rule, locale)
         except (ValueError, PermissionError, KeyError) as exc:
-            await err(message, locale, exc if not isinstance(exc, KeyError) else ValueError("Incomplete recurrence data"))
-            await state.clear()
+            detail = exc if not isinstance(exc, KeyError) else ValueError("Incomplete recurrence data")
+            await flow_err(message, locale, detail, t(locale, "enter_occurrence_count"))
 
     @router.message(Command("reschedule"))
     @router.message(F.text.in_(org_texts("reschedule")))
@@ -1318,13 +1377,13 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 calendar = await session.get(Calendar, changed[0].event.calendar_id)
                 await notify_subscribers(session, participant_bot, calendar, changed, "heading_event_rescheduled")
             await mirror_changed_events(db, settings, changed)
+            await state.clear()
             await message.answer(
                 t(locale, "events_updated_count", count=len(changed)),
                 reply_markup=organizer_main_menu(locale),
             )
         except (ValueError, PermissionError) as exc:
-            await err(message, locale, exc)
-        await state.clear()
+            await flow_err(message, locale, exc, t(locale, "enter_new_start"))
 
     @router.message(F.text.in_(org_texts("cancel_event")))
     async def cancel_event_start(message: Message, state: FSMContext) -> None:
@@ -1408,11 +1467,14 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 calendar = await session.get(Calendar, changed[0].event.calendar_id)
                 await notify_subscribers(session, participant_bot, calendar, changed, "heading_event_cancelled")
             await mirror_changed_events(db, settings, changed, cancelled=True)
+            await state.clear()
             await callback.message.edit_text(t(locale, "events_cancelled_count", count=len(changed)))
+            await restore_menu(callback, locale)
         except (ValueError, PermissionError) as exc:
-            await callback.message.edit_text(t(locale, "error", error=exc))
-        await state.clear()
-        await restore_menu(callback, locale)
+            scope = data.get("scope") or "one"
+            prompt = t(locale, "cancel_following_events" if scope == "following" else "cancel_this_event")
+            await callback.message.answer(t(locale, "error", error=exc))
+            await callback.message.answer(prompt, reply_markup=confirm_cancel_keyboard(occurrence_id, locale))
         await callback.answer()
 
     @router.callback_query(F.data == "o_cancel_no")
@@ -1552,6 +1614,10 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
     async def locale_for(telegram_id: int) -> str:
         async with db.sessions() as session:
             return await get_user_locale(session, telegram_id, settings.default_timezone)
+
+    async def flow_err(message: Message, locale: str, exc: Exception, retry_prompt: str) -> None:
+        await message.answer(t(locale, "error", error=exc))
+        await message.answer(retry_prompt, reply_markup=flow_nav_keyboard(locale))
 
     async def restore_menu(target: Message | CallbackQuery, locale: str, text: str | None = None) -> None:
         msg = target.message if isinstance(target, CallbackQuery) else target
@@ -1936,7 +2002,8 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
         )
         await callback.answer()
 
-    async def handle_confirm(user, event_id: int, reply_target: Message | CallbackQuery, locale: str) -> None:
+    async def handle_confirm(user, event_id: int, reply_target: Message | CallbackQuery, locale: str,
+                             *, keep_flow: bool = False) -> bool:
         name = participant_display_name(user)
         try:
             async with db.sessions() as session:
@@ -1948,20 +2015,55 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
                          time=display_time(occurrence.start_utc, calendar.timezone))
             else:
                 text = t(locale, "already_confirmed", title=occurrence.event.title)
+            if isinstance(reply_target, CallbackQuery):
+                await reply_target.message.edit_text(text)
+                await restore_menu(reply_target, locale)
+                await reply_target.answer()
+            else:
+                await reply_target.answer(text, reply_markup=participant_main_menu(locale))
+            return True
         except (ValueError, PermissionError) as exc:
             text = t(locale, "error", error=exc)
-        if isinstance(reply_target, CallbackQuery):
-            await reply_target.message.edit_text(text)
-            await restore_menu(reply_target, locale)
-            await reply_target.answer()
-        else:
-            await reply_target.answer(text, reply_markup=participant_main_menu(locale))
+            if isinstance(reply_target, CallbackQuery):
+                if keep_flow:
+                    await reply_target.message.answer(text)
+                else:
+                    await reply_target.message.edit_text(text)
+                    await restore_menu(reply_target, locale)
+                await reply_target.answer()
+            else:
+                await reply_target.answer(text, reply_markup=participant_main_menu(locale))
+            return False
 
     @router.callback_query(F.data.startswith("p_confirm:"))
     async def confirm_callback(callback: CallbackQuery, state: FSMContext) -> None:
-        await state.clear()
         locale = await locale_for(callback.from_user.id)
-        await handle_confirm(callback.from_user, int(callback.data.split(":", 1)[1]), callback, locale)
+        data = await state.get_data()
+        in_flow = await state.get_state() == ParticipantConfirmPick.occurrence.state
+        ok = await handle_confirm(
+            callback.from_user, int(callback.data.split(":", 1)[1]), callback, locale, keep_flow=in_flow)
+        if ok:
+            await state.clear()
+            return
+        if in_flow and data.get("series_id") and data.get("calendar_id"):
+            async with db.sessions() as session:
+                calendar = await session.get(Calendar, int(data["calendar_id"]))
+                user = await session.scalar(select(User).where(User.telegram_id == callback.from_user.id))
+                rows = await event_occurrences(session, int(data["series_id"]))
+                confirmed = await confirmed_occurrence_ids(session, user.id, [o.id for o in rows]) if user else set()
+                pending = [o for o in rows if o.id not in confirmed]
+            if pending:
+                await callback.message.answer(
+                    t(locale, "choose_occurrence_confirm"),
+                    reply_markup=occurrences_keyboard(
+                        occurrence_button_items(pending, calendar.timezone, mark_confirm=True),
+                        "p_confirm",
+                        locale,
+                    ),
+                )
+            else:
+                await state.clear()
+                await restore_menu(callback, locale)
 
     async def reply_subscriptions(message: Message, locale: str) -> None:
         async with db.sessions() as session:
@@ -2003,10 +2105,10 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
         try:
             async with db.sessions() as session:
                 await set_timezone(session, message.from_user.id, message.text.strip(), settings.default_timezone)
+            await state.clear()
             await message.answer(t(locale, "timezone_updated"), reply_markup=participant_main_menu(locale))
         except ValueError as exc:
-            await message.answer(t(locale, "error", error=exc), reply_markup=participant_main_menu(locale))
-        await state.clear()
+            await flow_err(message, locale, exc, t(locale, "enter_timezone"))
 
     async def pick_subscription(message: Message, prefix: str, prompt_key: str, locale: str) -> bool:
         async with db.sessions() as session:
@@ -2137,13 +2239,13 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
         try:
             async with db.sessions() as session:
                 changed = await set_reminders(session, message.from_user.id, data["calendar_id"], message.text.strip())
+            await state.clear()
             await message.answer(
                 t(locale, "reminders_saved") if changed else t(locale, "subscription_not_found"),
                 reply_markup=participant_main_menu(locale),
             )
         except ValueError as exc:
-            await message.answer(t(locale, "error", error=exc), reply_markup=participant_main_menu(locale))
-        await state.clear()
+            await flow_err(message, locale, exc, t(locale, "enter_reminders"))
 
     return router
 
