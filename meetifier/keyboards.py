@@ -144,12 +144,15 @@ def calendars_keyboard(
     *,
     with_nav: bool = True,
     show_back: bool = True,
+    with_new_calendar: bool = False,
 ) -> InlineKeyboardMarkup:
-    markup = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=c.name, callback_data=f"{prefix}:{c.id}")] for c in calendars
-        ]
-    )
+    rows = [[InlineKeyboardButton(text=c.name, callback_data=f"{prefix}:{c.id}")] for c in calendars]
+    if with_new_calendar:
+        rows.append([InlineKeyboardButton(
+            text=btn(ORG_BTN, "new_calendar", locale),
+            callback_data=f"{prefix}:new",
+        )])
+    markup = InlineKeyboardMarkup(inline_keyboard=rows)
     return attach_flow_nav(markup, locale, show_back=show_back) if with_nav else markup
 
 

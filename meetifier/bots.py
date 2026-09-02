@@ -346,7 +346,19 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             await discard_flow(target, state, locale, role="org")
 
         if current == OrganizerNewCalendar.name.state:
-            await cancel()
+            data_cal = await state.get_data()
+            if data_cal.get("resume_newevent"):
+                await state.set_state(OrganizerNewEvent.calendar)
+                await state.update_data(name=None, timezone=None, confirmation_hours=None)
+                async with db.sessions() as session:
+                    rows = await fetch_owned_calendars(session, uid)
+                await prompt_inline(
+                    target, t(locale, "choose_calendar_event"),
+                    calendars_keyboard(rows, "o_newevent", locale, show_back=False, with_new_calendar=True),
+                    locale, with_reply_nav=isinstance(target, Message),
+                )
+            else:
+                await cancel()
         elif current == OrganizerNewCalendar.timezone.state:
             await state.set_state(OrganizerNewCalendar.name)
             await state.update_data(name=None)
@@ -371,12 +383,12 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             await cancel()
         elif current == OrganizerNewEvent.title.state:
             await state.set_state(OrganizerNewEvent.calendar)
-            await state.update_data(calendar_id=None, title=None)
+            await state.update_data(calendar_id=None, title=None, resume_newevent=None)
             async with db.sessions() as session:
                 rows = await fetch_owned_calendars(session, uid)
             await prompt_inline(
                 target, t(locale, "choose_calendar_event"),
-                calendars_keyboard(rows, "o_newevent", locale, show_back=False),
+                calendars_keyboard(rows, "o_newevent", locale, show_back=False, with_new_calendar=True),
                 locale, with_reply_nav=isinstance(target, Message),
             )
         elif current == OrganizerNewEvent.start.state:
@@ -698,11 +710,21 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 calendar = await create_calendar(
                     session, message.from_user.id, data["name"], data["timezone"],
                     settings.default_timezone, message.text.strip())
-            await state.clear()
-            await message.answer(
-                t(locale, "calendar_created", name=calendar.name, id=calendar.id),
-                reply_markup=organizer_main_menu(locale),
-            )
+            if data.get("resume_newevent"):
+                await state.update_data(
+                    calendar_id=calendar.id, name=None, timezone=None, confirmation_hours=None,
+                    resume_newevent=None,
+                )
+                await state.set_state(OrganizerNewEvent.title)
+                await message.answer(
+                    t(locale, "calendar_created", name=calendar.name, id=calendar.id))
+                await message.answer(t(locale, "enter_event_title"), reply_markup=flow_nav_keyboard(locale))
+            else:
+                await state.clear()
+                await message.answer(
+                    t(locale, "calendar_created", name=calendar.name, id=calendar.id),
+                    reply_markup=organizer_main_menu(locale),
+                )
         except (ValueError, PermissionError) as exc:
             await flow_err(message, locale, exc, t(locale, "enter_confirmation_hours"))
 
@@ -761,15 +783,18 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
 
     async def pick_calendar(
         message: Message, prefix: str, prompt_key: str, locale: str, *, show_back: bool = False,
+        with_new_calendar: bool = False, allow_empty: bool = False,
     ) -> bool:
         async with db.sessions() as session:
             rows = await fetch_owned_calendars(session, message.from_user.id)
-        if not rows:
+        if not rows and not allow_empty:
             await message.answer(t(locale, "no_calendars_create"), reply_markup=organizer_main_menu(locale))
             return False
         await prompt_inline(
             message, t(locale, prompt_key),
-            calendars_keyboard(rows, prefix, locale, show_back=show_back),
+            calendars_keyboard(
+                rows, prefix, locale, show_back=show_back, with_new_calendar=with_new_calendar,
+            ),
             locale, with_reply_nav=True,
         )
         return True
@@ -1233,13 +1258,24 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             return
         await state.clear()
         await state.set_state(OrganizerNewEvent.calendar)
-        await pick_calendar(message, "o_newevent", "choose_calendar_event", locale)
+        await pick_calendar(
+            message, "o_newevent", "choose_calendar_event", locale,
+            with_new_calendar=True, allow_empty=True,
+        )
 
     @router.callback_query(F.data.startswith("o_newevent:"))
     async def new_event_calendar(callback: CallbackQuery, state: FSMContext) -> None:
-        calendar_id = int(callback.data.split(":", 1)[1])
+        choice = callback.data.split(":", 1)[1]
         locale = await locale_for(callback.from_user.id)
-        await state.update_data(calendar_id=calendar_id)
+        if choice == "new":
+            await state.update_data(resume_newevent=True)
+            await state.set_state(OrganizerNewCalendar.name)
+            await callback.message.edit_text(t(locale, "enter_calendar_name"))
+            await callback.message.answer("\u2060", reply_markup=flow_nav_keyboard(locale))
+            await callback.answer()
+            return
+        calendar_id = int(choice)
+        await state.update_data(calendar_id=calendar_id, resume_newevent=None)
         await state.set_state(OrganizerNewEvent.title)
         await callback.message.edit_text(t(locale, "enter_event_title"))
         await callback.message.answer("\u2060", reply_markup=flow_nav_keyboard(locale))

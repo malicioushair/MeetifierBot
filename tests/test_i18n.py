@@ -19,6 +19,27 @@ def test_flow_nav_keyboard_and_inline_row():
     assert flat[-1].text == t("ru", "btn_flow_cancel")
 
 
+def test_calendars_keyboard_with_new_calendar():
+    from meetifier.db import Calendar
+    from meetifier.i18n import ORG_BTN
+
+    markup = calendars_keyboard(
+        [Calendar(id=1, owner_user_id=1, name="Math", timezone=0)],
+        "o_newevent",
+        "en",
+        with_new_calendar=True,
+        show_back=False,
+    )
+    callbacks = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+    assert "o_newevent:1" in callbacks
+    assert "o_newevent:new" in callbacks
+    assert any(btn.text == ORG_BTN["new_calendar"]["en"] for row in markup.inline_keyboard for btn in row)
+
+    empty = calendars_keyboard([], "o_newevent", "ru", with_new_calendar=True, with_nav=False)
+    assert len(empty.inline_keyboard) == 1
+    assert empty.inline_keyboard[0][0].callback_data == "o_newevent:new"
+
+
 def test_normalize_locale():
     assert normalize_locale(None) == "en"
     assert normalize_locale("ru") == "ru"
