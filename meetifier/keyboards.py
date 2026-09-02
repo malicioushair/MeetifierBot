@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import calendar as cal_mod
+from datetime import date
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
 from .db import Calendar, Event
@@ -13,6 +16,8 @@ PAR_INPUT_BLOCKLIST = PARTICIPANT_BUTTONS | NAV_BUTTONS
 
 FLOW_CANCEL_DATA = "flow:cancel"
 FLOW_BACK_DATA = "flow:back"
+DT_PREFIX = "o_dt"
+DT_IGNORE = f"{DT_PREFIX}:ign"
 
 
 def org_texts(*actions: str) -> set[str]:
@@ -260,3 +265,86 @@ def confirm_cancel_keyboard(occurrence_id: int, locale: str | None = None) -> In
         ]]
     )
     return attach_flow_nav(markup, locale, show_back=True)
+
+
+def shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
+    idx = year * 12 + (month - 1) + delta
+    return idx // 12, idx % 12 + 1
+
+
+def date_calendar_keyboard(
+    year: int,
+    month: int,
+    locale: str | None = None,
+    *,
+    with_nav: bool = True,
+) -> InlineKeyboardMarkup:
+    """Month grid (Mon–Sun). Callbacks: o_dt:nav:YYYY-MM, o_dt:day:YYYY-MM-DD, o_dt:ign."""
+    prev_y, prev_m = shift_month(year, month, -1)
+    next_y, next_m = shift_month(year, month, 1)
+    header = [
+        InlineKeyboardButton(text="‹", callback_data=f"{DT_PREFIX}:nav:{prev_y:04d}-{prev_m:02d}"),
+        InlineKeyboardButton(
+            text=f"{t(locale, f'month_{month}')} {year}",
+            callback_data=DT_IGNORE,
+        ),
+        InlineKeyboardButton(text="›", callback_data=f"{DT_PREFIX}:nav:{next_y:04d}-{next_m:02d}"),
+    ]
+    weekdays = [
+        InlineKeyboardButton(text=t(locale, f"wd_{i}"), callback_data=DT_IGNORE)
+        for i in range(7)
+    ]
+    rows: list[list[InlineKeyboardButton]] = [header, weekdays]
+    # calendar.setfirstweekday(MONDAY); weeks are Mon..Sun
+    weeks = cal_mod.Calendar(firstweekday=0).monthdayscalendar(year, month)
+    today = date.today()
+    for week in weeks:
+        row: list[InlineKeyboardButton] = []
+        for day in week:
+            if day == 0:
+                row.append(InlineKeyboardButton(text=" ", callback_data=DT_IGNORE))
+                continue
+            label = str(day)
+            if date(year, month, day) == today:
+                label = f"·{day}·"
+            row.append(InlineKeyboardButton(
+                text=label,
+                callback_data=f"{DT_PREFIX}:day:{year:04d}-{month:02d}-{day:02d}",
+            ))
+        rows.append(row)
+    markup = InlineKeyboardMarkup(inline_keyboard=rows)
+    return attach_flow_nav(markup, locale, show_back=True) if with_nav else markup
+
+
+def hour_keyboard(locale: str | None = None, *, with_nav: bool = True) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for hour in range(24):
+        row.append(InlineKeyboardButton(
+            text=f"{hour:02d}",
+            callback_data=f"{DT_PREFIX}:hr:{hour}",
+        ))
+        if len(row) == 6:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    markup = InlineKeyboardMarkup(inline_keyboard=rows)
+    return attach_flow_nav(markup, locale, show_back=True) if with_nav else markup
+
+
+def minute_keyboard(locale: str | None = None, *, with_nav: bool = True) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for minute in range(0, 60, 5):
+        row.append(InlineKeyboardButton(
+            text=f"{minute:02d}",
+            callback_data=f"{DT_PREFIX}:mn:{minute}",
+        ))
+        if len(row) == 6:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    markup = InlineKeyboardMarkup(inline_keyboard=rows)
+    return attach_flow_nav(markup, locale, show_back=True) if with_nav else markup

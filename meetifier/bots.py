@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
@@ -9,12 +11,13 @@ from sqlalchemy import select
 from .config import Settings, format_timezone_offset
 from .db import Calendar, Database, Event, EventOccurrence, GoogleCalendarLink, Subscription, User
 from .i18n import LOCALES, normalize_locale, t
-from .keyboards import (FLOW_BACK_DATA, FLOW_CANCEL_DATA, ORG_INPUT_BLOCKLIST, PAR_INPUT_BLOCKLIST,
-                        calendars_keyboard, confirm_cancel_keyboard, confirm_google_adoption_keyboard,
-                        edit_scope_keyboard, event_confirm_keyboard, event_range_keyboard, event_series_keyboard,
-                        flow_nav_keyboard, google_calendars_keyboard, locale_keyboard, monthly_pos_keyboard,
-                        nav_texts, occurrences_keyboard, org_texts, organizer_main_menu, par_texts,
-                        participant_main_menu, recurrence_pattern_keyboard, weekday_pick_keyboard,
+from .keyboards import (DT_IGNORE, DT_PREFIX, FLOW_BACK_DATA, FLOW_CANCEL_DATA, ORG_INPUT_BLOCKLIST,
+                        PAR_INPUT_BLOCKLIST, calendars_keyboard, confirm_cancel_keyboard,
+                        confirm_google_adoption_keyboard, date_calendar_keyboard, edit_scope_keyboard,
+                        event_confirm_keyboard, event_range_keyboard, event_series_keyboard, flow_nav_keyboard,
+                        google_calendars_keyboard, hour_keyboard, locale_keyboard, minute_keyboard,
+                        monthly_pos_keyboard, nav_texts, occurrences_keyboard, org_texts, organizer_main_menu,
+                        par_texts, participant_main_menu, recurrence_pattern_keyboard, weekday_pick_keyboard,
                         weekdays_keyboard)
 from .flow import discard_flow
 from .google_sync import (adopt_google_calendar, authorization_url, create_oauth_state, get_google_account,
@@ -228,6 +231,35 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             await target.answer(text, reply_markup=markup)
             await target.answer("\u2060", reply_markup=flow_nav_keyboard(locale))
 
+    def datetime_picker_prompt(locale: str, data: dict, *, for_reschedule: bool = False) -> tuple[str, object]:
+        picked_date = data.get("dt_picked_date")
+        picked_hour = data.get("dt_picked_hour")
+        if picked_date and picked_hour is not None:
+            return (
+                t(locale, "pick_start_minute", date=picked_date, hour=f"{int(picked_hour):02d}"),
+                minute_keyboard(locale),
+            )
+        if picked_date:
+            return t(locale, "pick_start_hour", date=picked_date), hour_keyboard(locale)
+        key = "enter_new_start" if for_reschedule else "enter_start_time"
+        today = date.today()
+        return t(locale, key), date_calendar_keyboard(today.year, today.month, locale)
+
+    async def prompt_datetime_picker(
+        target: Message | CallbackQuery,
+        locale: str,
+        state: FSMContext,
+        *,
+        for_reschedule: bool = False,
+        with_reply_nav: bool = True,
+    ) -> None:
+        data = await state.get_data()
+        text, markup = datetime_picker_prompt(locale, data, for_reschedule=for_reschedule)
+        await prompt_inline(target, text, markup, locale, with_reply_nav=with_reply_nav)
+
+    async def clear_datetime_picker(state: FSMContext) -> None:
+        await state.update_data(dt_picked_date=None, dt_picked_hour=None)
+
     @router.message(CommandStart())
     async def start_handler(message: Message) -> None:
         locale = await locale_for(message.from_user.id)
@@ -331,13 +363,24 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 locale, with_reply_nav=isinstance(target, Message),
             )
         elif current == OrganizerNewEvent.start.state:
+            data_start = await state.get_data()
+            if data_start.get("dt_picked_hour") is not None:
+                await state.update_data(dt_picked_hour=None)
+                await prompt_datetime_picker(target, locale, state, with_reply_nav=isinstance(target, Message))
+                return
+            if data_start.get("dt_picked_date"):
+                await clear_datetime_picker(state)
+                await prompt_datetime_picker(target, locale, state, with_reply_nav=isinstance(target, Message))
+                return
             await state.set_state(OrganizerNewEvent.title)
             await state.update_data(start=None)
+            await clear_datetime_picker(state)
             await prompt_text(target, t(locale, "enter_event_title"), locale)
         elif current == OrganizerNewEvent.duration.state:
             await state.set_state(OrganizerNewEvent.start)
-            await state.update_data(duration=None)
-            await prompt_text(target, t(locale, "enter_start_time"), locale)
+            await state.update_data(duration=None, start=None)
+            await clear_datetime_picker(state)
+            await prompt_datetime_picker(target, locale, state, with_reply_nav=isinstance(target, Message))
         elif current == OrganizerNewEvent.pattern.state:
             await state.set_state(OrganizerNewEvent.duration)
             await state.update_data(pattern=None)
@@ -421,8 +464,22 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 locale, with_reply_nav=isinstance(target, Message),
             )
         elif current == OrganizerReschedule.new_start.state:
+            data_rs = await state.get_data()
+            if data_rs.get("dt_picked_hour") is not None:
+                await state.update_data(dt_picked_hour=None)
+                await prompt_datetime_picker(
+                    target, locale, state, for_reschedule=True, with_reply_nav=isinstance(target, Message),
+                )
+                return
+            if data_rs.get("dt_picked_date"):
+                await clear_datetime_picker(state)
+                await prompt_datetime_picker(
+                    target, locale, state, for_reschedule=True, with_reply_nav=isinstance(target, Message),
+                )
+                return
             await state.set_state(OrganizerReschedule.scope)
             await state.update_data(scope=None)
+            await clear_datetime_picker(state)
             await prompt_inline(
                 target, t(locale, "choose_edit_scope"),
                 edit_scope_keyboard("o_resched_scope", locale),
@@ -1105,9 +1162,10 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
     @router.message(OrganizerNewEvent.title, ~F.text.in_(ORG_INPUT_BLOCKLIST))
     async def new_event_title(message: Message, state: FSMContext) -> None:
         await state.update_data(title=message.text.strip())
+        await clear_datetime_picker(state)
         await state.set_state(OrganizerNewEvent.start)
         locale = await locale_for(message.from_user.id)
-        await message.answer(t(locale, "enter_start_time"), reply_markup=flow_nav_keyboard(locale))
+        await prompt_datetime_picker(message, locale, state)
 
     @router.message(OrganizerNewEvent.start, ~F.text.in_(ORG_INPUT_BLOCKLIST))
     async def new_event_start_time(message: Message, state: FSMContext) -> None:
@@ -1115,11 +1173,147 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         try:
             parse_local_naive(message.text.strip())
         except ValueError as exc:
-            await flow_err(message, locale, exc, t(locale, "enter_start_time"))
+            await message.answer(t(locale, "error", error=exc))
+            await prompt_datetime_picker(message, locale, state)
             return
         await state.update_data(start=message.text.strip())
+        await clear_datetime_picker(state)
         await state.set_state(OrganizerNewEvent.duration)
         await message.answer(t(locale, "enter_duration"), reply_markup=flow_nav_keyboard(locale))
+
+    async def apply_new_event_start(target: Message | CallbackQuery, state: FSMContext, start: str, locale: str) -> None:
+        await state.update_data(start=start)
+        await clear_datetime_picker(state)
+        await state.set_state(OrganizerNewEvent.duration)
+        if isinstance(target, CallbackQuery):
+            await target.message.edit_text(t(locale, "enter_duration"))
+            await target.message.answer("\u2060", reply_markup=flow_nav_keyboard(locale))
+            await target.answer()
+        else:
+            await target.answer(t(locale, "enter_duration"), reply_markup=flow_nav_keyboard(locale))
+
+    async def apply_reschedule_start(target: Message | CallbackQuery, state: FSMContext, start: str, locale: str) -> None:
+        data = await state.get_data()
+        try:
+            async with db.sessions() as session:
+                changed = await change_event(
+                    session, target.from_user.id, data["occurrence_id"], start,
+                    scope=data.get("scope") or "one")
+                calendar = await session.get(Calendar, changed[0].event.calendar_id)
+                await notify_subscribers(session, participant_bot, calendar, changed, "heading_event_rescheduled")
+            await mirror_changed_events(db, settings, changed)
+            await state.clear()
+            text = t(locale, "events_updated_count", count=len(changed))
+            if isinstance(target, CallbackQuery):
+                await target.message.edit_text(text)
+                await restore_menu(target, locale)
+                await target.answer()
+            else:
+                await target.answer(text, reply_markup=organizer_main_menu(locale))
+        except (ValueError, PermissionError) as exc:
+            if isinstance(target, CallbackQuery):
+                await target.message.answer(t(locale, "error", error=exc))
+                await prompt_datetime_picker(target, locale, state, for_reschedule=True)
+            else:
+                await target.answer(t(locale, "error", error=exc))
+                await prompt_datetime_picker(target, locale, state, for_reschedule=True)
+
+    @router.callback_query(F.data == DT_IGNORE)
+    async def datetime_ignore(callback: CallbackQuery) -> None:
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith(f"{DT_PREFIX}:"))
+    async def datetime_picker(callback: CallbackQuery, state: FSMContext) -> None:
+        current = await state.get_state()
+        for_reschedule = current == OrganizerReschedule.new_start.state
+        if current not in {OrganizerNewEvent.start.state, OrganizerReschedule.new_start.state}:
+            await callback.answer()
+            return
+        locale = await locale_for(callback.from_user.id)
+        parts = callback.data.split(":")
+        action = parts[1] if len(parts) > 1 else ""
+
+        if action == "ign":
+            await callback.answer()
+            return
+
+        if action == "nav" and len(parts) == 3:
+            try:
+                year_s, month_s = parts[2].split("-", 1)
+                year, month = int(year_s), int(month_s)
+                if not (1 <= month <= 12 and 1970 <= year <= 2100):
+                    raise ValueError
+            except ValueError:
+                await callback.answer()
+                return
+            key = "enter_new_start" if for_reschedule else "enter_start_time"
+            await callback.message.edit_text(
+                t(locale, key),
+                reply_markup=date_calendar_keyboard(year, month, locale),
+            )
+            await callback.answer()
+            return
+
+        if action == "day" and len(parts) == 3:
+            picked = parts[2]
+            try:
+                date.fromisoformat(picked)
+            except ValueError:
+                await callback.answer()
+                return
+            await state.update_data(dt_picked_date=picked, dt_picked_hour=None)
+            await callback.message.edit_text(
+                t(locale, "pick_start_hour", date=picked),
+                reply_markup=hour_keyboard(locale),
+            )
+            await callback.answer()
+            return
+
+        if action == "hr" and len(parts) == 3:
+            data = await state.get_data()
+            picked = data.get("dt_picked_date")
+            if not picked:
+                await clear_datetime_picker(state)
+                await prompt_datetime_picker(callback, locale, state, for_reschedule=for_reschedule)
+                return
+            try:
+                hour = int(parts[2])
+                if not 0 <= hour <= 23:
+                    raise ValueError
+            except ValueError:
+                await callback.answer()
+                return
+            await state.update_data(dt_picked_hour=hour)
+            await callback.message.edit_text(
+                t(locale, "pick_start_minute", date=picked, hour=f"{hour:02d}"),
+                reply_markup=minute_keyboard(locale),
+            )
+            await callback.answer()
+            return
+
+        if action == "mn" and len(parts) == 3:
+            data = await state.get_data()
+            picked = data.get("dt_picked_date")
+            hour = data.get("dt_picked_hour")
+            if not picked or hour is None:
+                await clear_datetime_picker(state)
+                await prompt_datetime_picker(callback, locale, state, for_reschedule=for_reschedule)
+                return
+            try:
+                minute = int(parts[2])
+                if not 0 <= minute <= 59:
+                    raise ValueError
+            except ValueError:
+                await callback.answer()
+                return
+            start = f"{picked} {int(hour):02d}:{minute:02d}"
+            if for_reschedule:
+                await apply_reschedule_start(callback, state, start, locale)
+            else:
+                await apply_new_event_start(callback, state, start, locale)
+            return
+
+        await callback.answer()
 
     @router.message(OrganizerNewEvent.duration, ~F.text.in_(ORG_INPUT_BLOCKLIST))
     async def new_event_duration(message: Message, state: FSMContext) -> None:
@@ -1360,30 +1554,20 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         scope = callback.data.split(":", 1)[1]
         locale = await locale_for(callback.from_user.id)
         await state.update_data(scope=scope)
+        await clear_datetime_picker(state)
         await state.set_state(OrganizerReschedule.new_start)
-        await callback.message.edit_text(t(locale, "enter_new_start"))
-        await callback.message.answer("\u2060", reply_markup=flow_nav_keyboard(locale))
-        await callback.answer()
+        await prompt_datetime_picker(callback, locale, state, for_reschedule=True)
 
     @router.message(OrganizerReschedule.new_start, ~F.text.in_(ORG_INPUT_BLOCKLIST))
     async def reschedule_time(message: Message, state: FSMContext) -> None:
-        data = await state.get_data()
         locale = await locale_for(message.from_user.id)
         try:
-            async with db.sessions() as session:
-                changed = await change_event(
-                    session, message.from_user.id, data["occurrence_id"], message.text.strip(),
-                    scope=data.get("scope") or "one")
-                calendar = await session.get(Calendar, changed[0].event.calendar_id)
-                await notify_subscribers(session, participant_bot, calendar, changed, "heading_event_rescheduled")
-            await mirror_changed_events(db, settings, changed)
-            await state.clear()
-            await message.answer(
-                t(locale, "events_updated_count", count=len(changed)),
-                reply_markup=organizer_main_menu(locale),
-            )
-        except (ValueError, PermissionError) as exc:
-            await flow_err(message, locale, exc, t(locale, "enter_new_start"))
+            parse_local_naive(message.text.strip())
+        except ValueError as exc:
+            await message.answer(t(locale, "error", error=exc))
+            await prompt_datetime_picker(message, locale, state, for_reschedule=True)
+            return
+        await apply_reschedule_start(message, state, message.text.strip(), locale)
 
     @router.message(F.text.in_(org_texts("cancel_event")))
     async def cancel_event_start(message: Message, state: FSMContext) -> None:
