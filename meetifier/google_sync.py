@@ -7,6 +7,7 @@ from collections.abc import Callable
 from datetime import date, datetime, time, timedelta, timezone
 from typing import TypeVar
 
+from cryptography.fernet import Fernet, InvalidToken
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
@@ -27,6 +28,7 @@ SCOPES = [
 ]
 
 T = TypeVar("T")
+ENCRYPTED_TOKEN_PREFIX = "fernet:"
 
 
 @dataclass(frozen=True)
@@ -93,12 +95,40 @@ def _naive_utc(value: datetime | None) -> datetime | None:
     return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def _token_cipher(settings: Settings) -> Fernet | None:
+    if not settings.google_token_encryption_key:
+        return None
+    return Fernet(settings.google_token_encryption_key.encode("ascii"))
+
+
+def _encrypt_token(settings: Settings, token: str | None) -> str | None:
+    if token is None:
+        return None
+    cipher = _token_cipher(settings)
+    if cipher is None:
+        return token
+    encrypted = cipher.encrypt(token.encode("utf-8")).decode("ascii")
+    return ENCRYPTED_TOKEN_PREFIX + encrypted
+
+
+def _decrypt_token(settings: Settings, token: str | None) -> str | None:
+    if token is None or not token.startswith(ENCRYPTED_TOKEN_PREFIX):
+        return token
+    cipher = _token_cipher(settings)
+    if cipher is None:
+        raise ValueError("Google tokens are encrypted but GOOGLE_TOKEN_ENCRYPTION_KEY is not configured")
+    try:
+        return cipher.decrypt(token.removeprefix(ENCRYPTED_TOKEN_PREFIX).encode("ascii")).decode("utf-8")
+    except (InvalidToken, UnicodeDecodeError) as exc:
+        raise ValueError("Unable to decrypt stored Google credentials") from exc
+
+
 def _credentials(settings: Settings, account: GoogleAccount) -> Credentials:
     # google-auth compares expiry to naive utcnow(); keep expiry naive UTC.
     expiry = _naive_utc(account.token_expiry)
     return Credentials(
-        token=account.access_token,
-        refresh_token=account.refresh_token,
+        token=_decrypt_token(settings, account.access_token),
+        refresh_token=_decrypt_token(settings, account.refresh_token),
         token_uri="https://oauth2.googleapis.com/token",
         client_id=settings.google_client_id,
         client_secret=settings.google_client_secret,
@@ -261,30 +291,42 @@ async def create_oauth_state(session: AsyncSession, telegram_id: int) -> str:
     return state
 
 
-async def consume_oauth_state(session: AsyncSession, state: str) -> int | None:
-    row = await session.scalar(select(OAuthState).where(OAuthState.state == state))
-    if not row:
-        return None
-    telegram_id = row.telegram_id
-    await session.delete(row)
+async def consume_oauth_state(session: AsyncSession, state: str, max_age_seconds: int = 900) -> int | None:
+    cutoff = utcnow() - timedelta(seconds=max_age_seconds)
+    await session.execute(delete(OAuthState).where(OAuthState.created_at < cutoff))
+    telegram_id = await session.scalar(
+        delete(OAuthState)
+        .where(OAuthState.state == state, OAuthState.created_at >= cutoff)
+        .returning(OAuthState.telegram_id)
+    )
     await session.commit()
     return telegram_id
 
 
-async def save_google_account(session: AsyncSession, telegram_id: int, default_tz: str,
-                              refresh_token: str, access_token: str | None, expiry: datetime | None, email: str) -> None:
+async def save_google_account(
+    session: AsyncSession,
+    settings: Settings,
+    telegram_id: int,
+    default_tz: int | str,
+    refresh_token: str,
+    access_token: str | None,
+    expiry: datetime | None,
+    email: str,
+) -> None:
     from .service import get_or_create_user
 
     user = await get_or_create_user(session, telegram_id, default_tz)
     account = await session.get(GoogleAccount, user.id)
+    encrypted_refresh_token = _encrypt_token(settings, refresh_token)
+    encrypted_access_token = _encrypt_token(settings, access_token)
     if account:
-        account.refresh_token = refresh_token
-        account.access_token = access_token
+        account.refresh_token = encrypted_refresh_token
+        account.access_token = encrypted_access_token
         account.token_expiry = expiry
         account.email = email
     else:
         session.add(GoogleAccount(
-            user_id=user.id, refresh_token=refresh_token, access_token=access_token,
+            user_id=user.id, refresh_token=encrypted_refresh_token, access_token=encrypted_access_token,
             token_expiry=expiry, email=email))
     await session.commit()
 
@@ -327,7 +369,7 @@ async def link_google_calendar(session: AsyncSession, telegram_id: int, calendar
 async def list_google_calendars(session: AsyncSession, settings: Settings, account: GoogleAccount) -> list[dict[str, str]]:
     loop = asyncio.get_running_loop()
     calendars, creds = await loop.run_in_executor(None, lambda: _list_calendars_sync(settings, account))
-    await _persist_refreshed_tokens(session, account, creds)
+    await _persist_refreshed_tokens(session, settings, account, creds)
     return calendars
 
 
@@ -544,7 +586,7 @@ async def sync_google_calendar(db: Database, settings: Settings, calendar_id: in
                 state.last_error = str(exc)[:2000]
                 await error_session.commit()
             raise
-        await _persist_refreshed_tokens(session, account, creds)
+        await _persist_refreshed_tokens(session, settings, account, creds)
         counts = {name: sum(c.action == name for c in changes) for name in ("created", "updated", "cancelled", "unchanged")}
         visible_changes = tuple(c for c in changes if c.action != "unchanged")
         return GoogleSyncResult(calendar_id=calendar_id, changes=visible_changes, **counts)
@@ -613,7 +655,7 @@ async def adopt_google_calendar(db: Database, settings: Settings, telegram_id: i
             updated += int(changed)
             latest_creds = creds
         if latest_creds:
-            await _persist_refreshed_tokens(session, account, latest_creds)
+            await _persist_refreshed_tokens(session, settings, account, latest_creds)
         return updated, len(targets), invitation_url
 
 
@@ -663,7 +705,7 @@ async def sync_created_events(db: Database, settings: Settings, calendar: Calend
                 logger.warning("Google sync create failed for occurrence %s: %s", occurrence.id, exc)
         await session.commit()
         if latest_creds:
-            await _persist_refreshed_tokens(session, account, latest_creds)
+            await _persist_refreshed_tokens(session, settings, account, latest_creds)
 
 
 async def sync_changed_event(db: Database, settings: Settings, occurrence: EventOccurrence, calendar: Calendar,
@@ -698,20 +740,34 @@ async def sync_changed_event(db: Database, settings: Settings, occurrence: Event
             logger.warning("Google sync change failed for occurrence %s: %s", occurrence.id, exc)
         await session.commit()
         if latest_creds:
-            await _persist_refreshed_tokens(session, account, latest_creds)
+            await _persist_refreshed_tokens(session, settings, account, latest_creds)
 
 
-async def _persist_refreshed_tokens(session: AsyncSession, account: GoogleAccount, creds: Credentials) -> None:
+async def _persist_refreshed_tokens(
+    session: AsyncSession, settings: Settings, account: GoogleAccount, creds: Credentials,
+) -> None:
     changed = False
-    if creds.token and creds.token != account.access_token:
-        account.access_token = creds.token
+    stored_access_token = _decrypt_token(settings, account.access_token)
+    access_token_is_plaintext = bool(
+        account.access_token and not account.access_token.startswith(ENCRYPTED_TOKEN_PREFIX)
+    )
+    if creds.token and (
+        creds.token != stored_access_token
+        or (settings.google_token_encryption_key and access_token_is_plaintext)
+    ):
+        account.access_token = _encrypt_token(settings, creds.token)
         changed = True
     expiry = _naive_utc(creds.expiry)
     if expiry != account.token_expiry:
         account.token_expiry = expiry
         changed = True
-    if creds.refresh_token and creds.refresh_token != account.refresh_token:
-        account.refresh_token = creds.refresh_token
+    stored_refresh_token = _decrypt_token(settings, account.refresh_token)
+    refresh_token_is_plaintext = not account.refresh_token.startswith(ENCRYPTED_TOKEN_PREFIX)
+    if creds.refresh_token and (
+        creds.refresh_token != stored_refresh_token
+        or (settings.google_token_encryption_key and refresh_token_is_plaintext)
+    ):
+        account.refresh_token = _encrypt_token(settings, creds.refresh_token)
         changed = True
     if changed:
         await session.commit()

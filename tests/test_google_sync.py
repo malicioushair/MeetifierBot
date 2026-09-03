@@ -1,20 +1,25 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
+from cryptography.fernet import Fernet
 from google.oauth2.credentials import Credentials
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from meetifier.config import Settings
 from meetifier.db import (Calendar, Database, Event, EventOccurrence, GoogleAccount, GoogleCalendarLink,
-                          GoogleEventAttendee, GoogleEventLink, GoogleEventState, NotificationJob)
+                          GoogleEventAttendee, GoogleEventLink, GoogleEventState, NotificationJob,
+                          OAuthState, utcnow)
 from meetifier.google_sync import (
     _credentials,
+    _decrypt_token,
     _naive_utc,
     _persist_refreshed_tokens,
+    consume_oauth_state,
     _upsert_google_event,
     event_to_google_body,
     google_enabled,
+    save_google_account,
 )
 from meetifier.service import create_calendar, get_or_create_user
 
@@ -83,13 +88,83 @@ async def test_persist_refreshed_tokens_updates_account(db):
         )
         creds.expiry = datetime(2030, 1, 1, 12, 0, tzinfo=timezone.utc)
 
-        await _persist_refreshed_tokens(session, account, creds)
+        settings = Settings(
+            organizer_bot_token="a", participant_bot_token="b", participant_bot_username="c",
+        )
+        await _persist_refreshed_tokens(session, settings, account, creds)
 
         stored = await session.get(GoogleAccount, user.id)
         assert stored is not None
         assert stored.access_token == "new_at"
         assert stored.refresh_token == "new_rt"
         assert stored.token_expiry == datetime(2030, 1, 1, 12, 0)
+
+
+async def test_plaintext_tokens_are_upgraded_to_encrypted_storage(db):
+    settings = Settings(
+        organizer_bot_token="a", participant_bot_token="b", participant_bot_username="c",
+        google_client_id="id", google_client_secret="secret",
+        google_redirect_uri="https://calendar.example.com/oauth/google/callback",
+        google_token_encryption_key=Fernet.generate_key().decode("ascii"),
+    )
+    async with db.sessions() as session:
+        user = await get_or_create_user(session, 1, 0)
+        account = GoogleAccount(
+            user_id=user.id,
+            refresh_token="refresh-token",
+            access_token="access-token",
+            token_expiry=datetime(2030, 1, 1),
+        )
+        session.add(account)
+        await session.commit()
+        creds = Credentials(
+            token="access-token",
+            refresh_token="refresh-token",
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id="id",
+            client_secret="secret",
+        )
+
+        await _persist_refreshed_tokens(session, settings, account, creds)
+
+        assert account.access_token.startswith("fernet:")
+        assert account.refresh_token.startswith("fernet:")
+        assert _decrypt_token(settings, account.access_token) == "access-token"
+        assert _decrypt_token(settings, account.refresh_token) == "refresh-token"
+        restored = _credentials(settings, account)
+        assert restored.token == "access-token"
+        assert restored.refresh_token == "refresh-token"
+
+
+async def test_new_google_account_tokens_are_encrypted(db):
+    settings = Settings(
+        organizer_bot_token="a", participant_bot_token="b", participant_bot_username="c",
+        google_client_id="id", google_client_secret="secret",
+        google_redirect_uri="https://calendar.example.com/oauth/google/callback",
+        google_token_encryption_key=Fernet.generate_key().decode("ascii"),
+    )
+    async with db.sessions() as session:
+        await save_google_account(
+            session, settings, 42, 0, "refresh-token", "access-token", None, "user@example.com",
+        )
+        account = await session.scalar(select(GoogleAccount))
+
+        assert account.refresh_token.startswith("fernet:")
+        assert account.access_token.startswith("fernet:")
+        assert _decrypt_token(settings, account.refresh_token) == "refresh-token"
+
+
+async def test_oauth_state_is_expiring_and_one_use(db):
+    async with db.sessions() as session:
+        session.add_all([
+            OAuthState(state="expired", telegram_id=1, created_at=utcnow() - timedelta(minutes=20)),
+            OAuthState(state="valid", telegram_id=2),
+        ])
+        await session.commit()
+
+        assert await consume_oauth_state(session, "expired", max_age_seconds=900) is None
+        assert await consume_oauth_state(session, "valid", max_age_seconds=900) == 2
+        assert await consume_oauth_state(session, "valid", max_age_seconds=900) is None
 
 
 async def test_google_event_import_update_cancel_and_attendees(db):

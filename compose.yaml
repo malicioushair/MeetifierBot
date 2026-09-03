@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: meetifier
       POSTGRES_USER: meetifier
-      POSTGRES_PASSWORD: meetifier
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -12,17 +12,43 @@ services:
       interval: 3s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
   app:
     build: .
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://meetifier:meetifier@db:5432/meetifier
+      DATABASE_URL: postgresql+asyncpg://meetifier:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/meetifier
+      OAUTH_HOST: 0.0.0.0
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
     depends_on:
       db:
         condition: service_healthy
     restart: unless-stopped
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["production"]
+    environment:
+      MEETIFIER_DOMAIN: ${MEETIFIER_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
 volumes:
   postgres_data:
-
+  caddy_data:
+  caddy_config:
