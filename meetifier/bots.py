@@ -15,7 +15,8 @@ from .keyboards import (DT_IGNORE, DT_PREFIX, FLOW_BACK_DATA, FLOW_CANCEL_DATA, 
                         PAR_INPUT_BLOCKLIST, calendars_keyboard, confirm_cancel_keyboard,
                         confirm_google_adoption_keyboard, date_calendar_keyboard, edit_scope_keyboard,
                         event_confirm_keyboard, event_range_keyboard, event_series_keyboard, flow_nav_keyboard,
-                        google_calendars_keyboard, hour_keyboard, invite_link_keyboard, locale_keyboard,
+                        google_calendars_keyboard, google_onboarding_keyboard, hour_keyboard, invite_link_keyboard,
+                        locale_keyboard,
                         minute_keyboard, monthly_pos_keyboard, nav_texts, occurrences_keyboard, org_texts,
                         organizer_main_menu, par_texts, participant_main_menu, recurrence_pattern_keyboard,
                         subscribed_events_keyboard, weekday_pick_keyboard, weekdays_keyboard)
@@ -25,10 +26,10 @@ from .google_sync import (adopt_google_calendar, authorization_url, create_oauth
                           sync_changed_event, sync_created_events, sync_google_calendar)
 from .recurrence import RecurrenceRule, parse_local_naive
 from .service import (calendar_event_series, calendar_events, change_event, confirm_event, confirmations_for_event,
-                      confirmed_occurrence_ids, create_calendar, create_events, display_time, ensure_default_calendar,
-                      event_occurrences, get_user_locale, invitation_event, make_invitation, set_confirmation_hours,
-                      set_locale, set_reminders, set_subscription_state, set_timezone, subscribe,
-                      upcoming_for_user_with_status)
+                      confirmed_occurrence_ids, create_calendar, create_events, dismiss_google_prompt, display_time,
+                      ensure_default_calendar, event_occurrences, get_user_locale, invitation_event, make_invitation,
+                      set_confirmation_hours, set_locale, set_reminders, set_subscription_state, set_timezone,
+                      should_show_google_onboarding, subscribe, upcoming_for_user_with_status)
 from .states import (OrganizerCancelEvent, OrganizerConfirmTiming, OrganizerConfirmations, OrganizerEvents,
                      OrganizerGoogleAdopt, OrganizerGoogleImport, OrganizerGoogleMap, OrganizerGoogleSync,
                      OrganizerInvite, OrganizerNewCalendar, OrganizerNewEvent, OrganizerReschedule,
@@ -171,12 +172,22 @@ async def mirror_changed_events(db: Database, settings: Settings, occurrences: l
 async def send_organizer_onboarding(
     message: Message, locale: str, db: Database, settings: Settings, *, with_language_picker: bool = False,
 ) -> None:
-    async with db.sessions() as session:
-        await ensure_default_calendar(
-            session, message.from_user.id, settings.default_timezone, t(locale, "default_calendar_name"),
+    show_google = False
+    oauth_url = ""
+    if google_enabled(settings):
+        async with db.sessions() as session:
+            show_google = await should_show_google_onboarding(session, message.from_user.id, settings)
+            if show_google:
+                token = await create_oauth_state(session, message.from_user.id)
+                oauth_url = authorization_url(settings, token)
+    if show_google:
+        await message.answer(
+            t(locale, "org.welcome_google", url=oauth_url),
+            reply_markup=google_onboarding_keyboard(oauth_url, locale),
         )
-    await message.answer(t(locale, "org.welcome"), reply_markup=organizer_main_menu(locale))
-    await message.answer(t(locale, "org.onboarding"))
+    else:
+        await message.answer(t(locale, "org.welcome"), reply_markup=organizer_main_menu(locale))
+        await message.answer(t(locale, "org.onboarding"))
     if with_language_picker:
         await message.answer(t(locale, "choose_language"), reply_markup=locale_keyboard("o_locale"))
 
@@ -915,6 +926,48 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         await restore_menu(callback, locale)
         await callback.answer()
 
+    async def send_google_link(target: Message | CallbackQuery, locale: str) -> None:
+        async with db.sessions() as session:
+            token = await create_oauth_state(session, target.from_user.id)
+        url = authorization_url(settings, token)
+        text = t(locale, "google_open_link", url=url)
+        if isinstance(target, CallbackQuery):
+            await target.message.answer(text, reply_markup=organizer_main_menu(locale))
+            await target.answer()
+        else:
+            await target.answer(text, reply_markup=organizer_main_menu(locale))
+
+    @router.callback_query(F.data == "o_onboard_skip")
+    async def onboard_skip_google(callback: CallbackQuery, state: FSMContext) -> None:
+        await state.clear()
+        locale = await locale_for(callback.from_user.id)
+        async with db.sessions() as session:
+            await dismiss_google_prompt(session, callback.from_user.id, settings.default_timezone)
+        await callback.message.edit_text(f"{t(locale, 'org.welcome')}\n\n{t(locale, 'org.onboarding')}")
+        await restore_menu(callback, locale)
+        await callback.answer()
+
+    @router.callback_query(F.data == "o_onboard_import")
+    async def onboard_import(callback: CallbackQuery, state: FSMContext) -> None:
+        locale = await locale_for(callback.from_user.id)
+        await google_import_start(
+            callback.message, state, locale=locale, telegram_id=callback.from_user.id,
+        )
+
+    @router.callback_query(F.data == "o_onboard_calendar")
+    async def onboard_new_calendar(callback: CallbackQuery, state: FSMContext) -> None:
+        locale = await locale_for(callback.from_user.id)
+        await state.clear()
+        await state.set_state(OrganizerNewCalendar.name)
+        await callback.message.edit_text(t(locale, "enter_calendar_name"))
+        await callback.message.answer("\u2060", reply_markup=flow_nav_keyboard(locale))
+        await callback.answer()
+
+    @router.callback_query(F.data == "o_onboard_newevent")
+    async def onboard_new_event(callback: CallbackQuery, state: FSMContext) -> None:
+        locale = await locale_for(callback.from_user.id)
+        await new_event_start(callback.message, state, locale=locale, telegram_id=callback.from_user.id)
+
     @router.message(F.text.in_(org_texts("google_link")))
     async def google_link_start(message: Message, state: FSMContext) -> None:
         await state.clear()
@@ -922,12 +975,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         if not google_enabled(settings):
             await message.answer(t(locale, "google_not_configured"), reply_markup=organizer_main_menu(locale))
             return
-        async with db.sessions() as session:
-            token = await create_oauth_state(session, message.from_user.id)
-        await message.answer(
-            t(locale, "google_open_link", url=authorization_url(settings, token)),
-            reply_markup=organizer_main_menu(locale),
-        )
+        await send_google_link(message, locale)
 
     @router.message(F.text.in_(org_texts("google_map")))
     async def google_map_start(message: Message, state: FSMContext) -> None:
@@ -1012,14 +1060,17 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
 
     @router.message(Command("googleimport"))
     @router.message(F.text.in_(org_texts("google_import")))
-    async def google_import_start(message: Message, state: FSMContext) -> None:
+    async def google_import_start(
+        message: Message, state: FSMContext, *, locale: str | None = None, telegram_id: int | None = None,
+    ) -> None:
         await state.clear()
-        locale = await locale_for(message.from_user.id)
+        uid = telegram_id if telegram_id is not None else message.from_user.id
+        locale = locale or await locale_for(uid)
         if not google_enabled(settings):
             await message.answer(t(locale, "google_not_configured"), reply_markup=organizer_main_menu(locale))
             return
         async with db.sessions() as session:
-            account = await get_google_account(session, message.from_user.id)
+            account = await get_google_account(session, uid)
             if not account:
                 await message.answer(t(locale, "google_link_first"), reply_markup=organizer_main_menu(locale))
                 return
@@ -1289,8 +1340,12 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
 
     @router.message(Command("newevent"))
     @router.message(F.text.in_(org_texts("new_event")))
-    async def new_event_start(message: Message, state: FSMContext, command: CommandObject | None = None) -> None:
-        locale = await locale_for(message.from_user.id)
+    async def new_event_start(
+        message: Message, state: FSMContext, command: CommandObject | None = None,
+        *, locale: str | None = None, telegram_id: int | None = None,
+    ) -> None:
+        uid = telegram_id if telegram_id is not None else message.from_user.id
+        locale = locale or await locale_for(uid)
         if command and command.args:
             await state.clear()
             try:
@@ -1299,8 +1354,8 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 weeks = int(parts[4]) if len(parts) == 5 else 1
                 async with db.sessions() as session:
                     occurrences = await create_events(
-                        session, message.from_user.id, int(calendar_id), title, start, int(duration), weeks)
-                    invitation = await make_invitation(session, message.from_user.id, occurrences[0].event_id)
+                        session, uid, int(calendar_id), title, start, int(duration), weeks)
+                    invitation = await make_invitation(session, uid, occurrences[0].event_id)
                 await mirror_created_events(db, settings, int(calendar_id), occurrences)
                 url = invite_url(settings, invitation.token)
                 await message.answer(
@@ -1314,9 +1369,9 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         await state.clear()
         async with db.sessions() as session:
             await ensure_default_calendar(
-                session, message.from_user.id, settings.default_timezone, t(locale, "default_calendar_name"),
+                session, uid, settings.default_timezone, t(locale, "default_calendar_name"),
             )
-            rows = await fetch_owned_calendars(session, message.from_user.id)
+            rows = await fetch_owned_calendars(session, uid)
         if len(rows) == 1:
             await state.update_data(calendar_id=rows[0].id)
             await state.set_state(OrganizerNewEvent.title)

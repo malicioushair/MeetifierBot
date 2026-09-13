@@ -193,6 +193,26 @@ def invite_link_keyboard(url: str, locale: str | None = None) -> InlineKeyboardM
     ]])
 
 
+def google_onboarding_keyboard(url: str, locale: str | None = None) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text=t(locale, "btn_skip_google"),
+            callback_data="o_onboard_skip",
+        ),
+    ]])
+
+
+def post_google_link_keyboard(locale: str | None = None) -> InlineKeyboardMarkup:
+    b = lambda action: btn(ORG_BTN, action, locale)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=b("google_import"), callback_data="o_onboard_import"),
+            InlineKeyboardButton(text=b("new_calendar"), callback_data="o_onboard_calendar"),
+        ],
+        [InlineKeyboardButton(text=b("new_event"), callback_data="o_onboard_newevent")],
+    ])
+
+
 def occurrences_keyboard(
     items: list[tuple[str, int]],
     prefix: str,

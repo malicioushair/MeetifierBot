@@ -177,6 +177,25 @@ async def get_or_create_user(session: AsyncSession, telegram_id: int, default_ti
     return user
 
 
+async def dismiss_google_prompt(session: AsyncSession, telegram_id: int, default_tz: int | str) -> None:
+    user = await get_or_create_user(session, telegram_id, default_tz)
+    user.google_prompt_skipped = True
+    await session.commit()
+
+
+async def should_show_google_onboarding(
+    session: AsyncSession, telegram_id: int, settings,
+) -> bool:
+    from .google_sync import get_google_account, google_enabled
+
+    if not google_enabled(settings):
+        return False
+    if await get_google_account(session, telegram_id):
+        return False
+    user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+    return not (user and user.google_prompt_skipped)
+
+
 async def get_user_locale(session: AsyncSession, telegram_id: int, default_timezone: int | str = 0) -> str:
     user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
     if not user:

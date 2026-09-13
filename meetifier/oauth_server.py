@@ -12,6 +12,7 @@ from .config import Settings
 from .db import Database, User
 from .google_sync import complete_oauth, consume_oauth_state, google_enabled, save_google_account
 from .i18n import normalize_locale, t
+from .keyboards import post_google_link_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,11 @@ async def google_callback(request: web.Request) -> web.Response:
             await bot.send_message(
                 telegram_id,
                 t(locale, "google_linked", email=email or t(locale, "google_connected")),
+            )
+            await bot.send_message(
+                telegram_id,
+                t(locale, "org.google_linked_next"),
+                reply_markup=post_google_link_keyboard(locale),
             )
         except Exception as exc:
             logger.warning("Could not notify organizer %s: %s", telegram_id, exc)

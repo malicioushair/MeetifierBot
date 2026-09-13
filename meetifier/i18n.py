@@ -54,9 +54,17 @@ MESSAGES: dict[str, dict[str, str]] = {
         "org.welcome": "Welcome to Meetifier Organizer!",
         "par.welcome": "Welcome to Meetifier Participant!",
         "default_calendar_name": "My schedule",
+        "org.welcome_google": (
+            "Welcome to Meetifier Organizer!\n\n"
+            "Connect Google Calendar to import your schedule or sync events.\n\n"
+            "Open this link:\n{url}"
+        ),
+        "org.google_linked_next": "What next? Import a Google calendar, create an empty calendar, or add an event.",
+        "btn_copy_google_link": "📋 Copy Google link",
+        "btn_skip_google": "Skip for now",
         "org.onboarding": (
             "Typical flow\n"
-            "1. Add an event (a default schedule is created for you)\n"
+            "1. Add an event (or import from Google)\n"
             "2. Share the invite link for that event\n"
             "3. Participants subscribe to the event in the Participant Bot\n"
             "4. Reschedule or cancel when plans change\n"
@@ -331,9 +339,17 @@ MESSAGES: dict[str, dict[str, str]] = {
         "org.welcome": "Добро пожаловать в Meetifier Organizer!",
         "par.welcome": "Добро пожаловать в Meetifier Participant!",
         "default_calendar_name": "Моё расписание",
+        "org.welcome_google": (
+            "Добро пожаловать в Meetifier Organizer!\n\n"
+            "Подключите Google Calendar, чтобы импортировать расписание или синхронизировать события.\n\n"
+            "Откройте ссылку:\n{url}"
+        ),
+        "org.google_linked_next": "Что дальше? Импорт из Google, пустой календарь или новое событие.",
+        "btn_copy_google_link": "📋 Копировать ссылку Google",
+        "btn_skip_google": "Пропустить",
         "org.onboarding": (
             "Обычный сценарий\n"
-            "1. Создайте календарь\n"
+            "1. Добавьте событие (или импортируйте из Google)\n"
             "2. Добавьте события\n"
             "3. Отправьте ссылку-приглашение\n"
             "4. Участники подписываются в Participant Bot\n"
@@ -608,9 +624,17 @@ MESSAGES: dict[str, dict[str, str]] = {
         "org.welcome": "Dobrodošli u Meetifier Organizer!",
         "par.welcome": "Dobrodošli u Meetifier Participant!",
         "default_calendar_name": "Moj raspored",
+        "org.welcome_google": (
+            "Dobrodošli u Meetifier Organizer!\n\n"
+            "Povežite Google Calendar da uvezete raspored ili sinhronizujete događaje.\n\n"
+            "Otvorite link:\n{url}"
+        ),
+        "org.google_linked_next": "Šta dalje? Uvoz iz Google-a, prazan kalendar ili novi događaj.",
+        "btn_copy_google_link": "📋 Kopiraj Google link",
+        "btn_skip_google": "Preskoči",
         "org.onboarding": (
             "Uobičajeni tok\n"
-            "1. Napravite kalendar\n"
+            "1. Dodajte događaj (ili uvezite iz Google-a)\n"
             "2. Dodajte događaje\n"
             "3. Pošaljite link pozivnice\n"
             "4. Učesnici se pretplate u Participant Bot-u\n"

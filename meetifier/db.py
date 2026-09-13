@@ -47,6 +47,7 @@ class User(Base):
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     timezone: Mapped[int] = mapped_column(UtcOffsetHours, default=0)
     locale: Mapped[str] = mapped_column(String(8), default=DEFAULT_LOCALE)
+    google_prompt_skipped: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
