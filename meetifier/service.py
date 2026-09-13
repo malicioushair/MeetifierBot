@@ -4,6 +4,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -221,20 +222,38 @@ async def event_occurrences(session: AsyncSession, event_id: int, range_mode: st
 async def get_or_create_user(session: AsyncSession, telegram_id: int, default_timezone: int | str,
                              locale: str | None = None) -> User:
     user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
-    if not user:
-        user = User(
-            telegram_id=telegram_id,
-            timezone=parse_timezone_offset(default_timezone),
-            locale=normalize_locale(locale) if locale else DEFAULT_LOCALE,
-        )
-        session.add(user)
+    if user:
+        return user
+    user = User(
+        telegram_id=telegram_id,
+        timezone=parse_timezone_offset(default_timezone),
+        locale=normalize_locale(locale) if locale else DEFAULT_LOCALE,
+    )
+    session.add(user)
+    try:
         await session.flush()
+    except IntegrityError:
+        await session.rollback()
+        user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+        if user is None:
+            raise
     return user
 
 
 async def dismiss_google_prompt(session: AsyncSession, telegram_id: int, default_tz: int | str) -> None:
     user = await get_or_create_user(session, telegram_id, default_tz)
     user.google_prompt_skipped = True
+    await session.commit()
+
+
+async def should_offer_org_onboarding(session: AsyncSession, telegram_id: int) -> bool:
+    user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+    return not (user and user.org_onboarding_seen)
+
+
+async def mark_org_onboarding_seen(session: AsyncSession, telegram_id: int, default_tz: int | str) -> None:
+    user = await get_or_create_user(session, telegram_id, default_tz)
+    user.org_onboarding_seen = True
     await session.commit()
 
 

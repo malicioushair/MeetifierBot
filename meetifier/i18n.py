@@ -24,7 +24,7 @@ ORG_BTN = {
     "confirm_timing": {"en": "⏱ Attendance ask", "ru": "⏱ Запрос участия", "sr": "⏱ Zahtev prisustva"},
     "google_link": {"en": "🔗 Link Google", "ru": "🔗 Связать Google", "sr": "🔗 Poveži Google"},
     "google_map": {"en": "📎 Map to Google", "ru": "📎 Привязать к Google", "sr": "📎 Mapiraj na Google"},
-    "google_import": {"en": "⬇️ Import Google", "ru": "⬇️ Импорт Google", "sr": "⬇️ Uvoz Google"},
+    "google_import": {"en": "⬇️ Import from Google", "ru": "⬇️ Импорт из Google", "sr": "⬇️ Uvoz iz Google-a"},
     "google_sync": {"en": "🔄 Sync Google", "ru": "🔄 Синхронизация Google", "sr": "🔄 Sinhronizuj Google"},
     "google_adopt": {"en": "📣 Invite Google guests", "ru": "📣 Пригласить гостей Google", "sr": "📣 Pozovi Google goste"},
     "language": {"en": "🌐 Language", "ru": "🌐 Язык", "sr": "🌐 Jezik"},
@@ -62,6 +62,19 @@ MESSAGES: dict[str, dict[str, str]] = {
         "org.google_linked_next": "What next? Import a Google calendar, create an empty calendar, or add an event.",
         "btn_copy_google_link": "📋 Copy Google link",
         "btn_skip_google": "Skip for now",
+        "org.read_onboarding_prompt": (
+            "If you'd like a quick introduction to the bot, tap a button below:"
+        ),
+        "btn_take_onboarding": "Take onboarding",
+        "btn_skip_onboarding": "Skip",
+        "org.onboarding_short": (
+            "Basic scenario:\n"
+            "1. Create an event (or import from Google)\n"
+            "2. Share the invite link with participants\n"
+            "3. They subscribe in the Participant Bot\n"
+            "4. Reschedule, cancel, or check confirmations when needed\n\n"
+            "Use the menu buttons below to explore features. Tap ❓ Help for full details and commands."
+        ),
         "org.onboarding": (
             "Typical flow\n"
             "1. Add an event (or import from Google)\n"
@@ -221,7 +234,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "google_choose": "Choose a Google calendar:",
         "google_choose_import": "Choose a filled Google calendar to import:\n{names}",
         "google_map_expired": "Selection expired. Start again with 📎 Map to Google.",
-        "google_import_expired": "Selection expired. Start Import Google again.",
+        "google_import_expired": "Selection expired. Start Import from Google again.",
         "google_mapped": "Mapped to Google calendar: {name}\nImported {created} existing event(s); updated {updated}.",
         "google_imported": (
             "Imported {name} as Meetifier calendar #{id}.\n"
@@ -271,7 +284,11 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "invite_invalid": "This invitation is invalid or expired.",
         "invited_to": "You were invited to «{name}» ({timezone}).",
+        "par.invite_onboarding": (
+            "Hello! To receive updates on «{event}» with {organizer}, tap the button below:"
+        ),
         "btn_subscribe": "Subscribe to {name}",
+        "btn_subscribe_short": "Subscribe",
         "subscribed": "Subscribed to «{name}». Tap 📅 Upcoming to see your dates.",
         "usage_upcoming": "Usage: /upcoming [next|week|next_week|month]",
         "no_pending_confirm": "No events waiting for confirmation.",
@@ -351,6 +368,19 @@ MESSAGES: dict[str, dict[str, str]] = {
         "org.google_linked_next": "Что дальше? Импорт из Google, пустой календарь или новое событие.",
         "btn_copy_google_link": "📋 Копировать ссылку Google",
         "btn_skip_google": "Пропустить",
+        "org.read_onboarding_prompt": (
+            "Если хотите кратко познакомиться с ботом, нажмите кнопку ниже:"
+        ),
+        "btn_take_onboarding": "Пройти обучение",
+        "btn_skip_onboarding": "Пропустить",
+        "org.onboarding_short": (
+            "Базовый сценарий:\n"
+            "1. Создайте событие (или импортируйте из Google)\n"
+            "2. Отправьте ссылку-приглашение участникам\n"
+            "3. Они подписываются в Participant Bot\n"
+            "4. Переносите, отменяйте или смотрите подтверждения\n\n"
+            "Используйте кнопки меню ниже. Подробности — в ❓ Помощь."
+        ),
         "org.onboarding": (
             "Обычный сценарий\n"
             "1. Добавьте событие (или импортируйте из Google)\n"
@@ -510,7 +540,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "google_choose": "Выберите календарь Google:",
         "google_choose_import": "Выберите заполненный календарь Google для импорта:\n{names}",
         "google_map_expired": "Выбор устарел. Начните снова через 📎 Привязать к Google.",
-        "google_import_expired": "Выбор устарел. Начните импорт Google снова.",
+        "google_import_expired": "Выбор устарел. Начните «Импорт из Google» снова.",
         "google_mapped": "Привязано к Google: {name}\nИмпортировано существующих: {created}; обновлено: {updated}.",
         "google_imported": (
             "Импортирован «{name}» как календарь Meetifier #{id}.\n"
@@ -560,7 +590,11 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "invite_invalid": "Это приглашение недействительно или истекло.",
         "invited_to": "Вас пригласили в «{name}» ({timezone}).",
+        "par.invite_onboarding": (
+            "Здравствуйте! Чтобы получать уведомления о «{event}» от {organizer}, нажмите кнопку ниже:"
+        ),
         "btn_subscribe": "Подписаться на {name}",
+        "btn_subscribe_short": "Подписаться",
         "subscribed": "Вы подписались на «{name}». Нажмите 📅 Ближайшие, чтобы увидеть события.",
         "usage_upcoming": "Использование: /upcoming [next|week|next_week|month]",
         "no_pending_confirm": "Нет событий, ожидающих подтверждения.",
@@ -640,6 +674,19 @@ MESSAGES: dict[str, dict[str, str]] = {
         "org.google_linked_next": "Šta dalje? Uvoz iz Google-a, prazan kalendar ili novi događaj.",
         "btn_copy_google_link": "📋 Kopiraj Google link",
         "btn_skip_google": "Preskoči",
+        "org.read_onboarding_prompt": (
+            "Ako želite kratak uvod u bota, dodirnite dugme ispod:"
+        ),
+        "btn_take_onboarding": "Prođi uvod",
+        "btn_skip_onboarding": "Preskoči",
+        "org.onboarding_short": (
+            "Osnovni scenario:\n"
+            "1. Kreirajte događaj (ili uvezite iz Google-a)\n"
+            "2. Podelite link pozivnice učesnicima\n"
+            "3. Oni se pretplate u Participant Bot-u\n"
+            "4. Pomerite, otkažite ili proverite potvrde po potrebi\n\n"
+            "Koristite dugmad menija ispod. Detalji su u ❓ Pomoć."
+        ),
         "org.onboarding": (
             "Uobičajeni tok\n"
             "1. Dodajte događaj (ili uvezite iz Google-a)\n"
@@ -799,7 +846,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "google_choose": "Izaberite Google kalendar:",
         "google_choose_import": "Izaberite popunjen Google kalendar za uvoz:\n{names}",
         "google_map_expired": "Izbor je istekao. Počnite ponovo sa 📎 Mapiraj na Google.",
-        "google_import_expired": "Izbor je istekao. Ponovo pokrenite uvoz Google.",
+        "google_import_expired": "Izbor je istekao. Ponovo pokrenite «Uvoz iz Google-a».",
         "google_mapped": "Mapirano na Google kalendar: {name}\nUvezeno postojećih: {created}; ažurirano: {updated}.",
         "google_imported": (
             "Uvezen {name} kao Meetifier kalendar #{id}.\n"
@@ -849,7 +896,11 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "invite_invalid": "Ova pozivnica je nevažeća ili je istekla.",
         "invited_to": "Pozvani ste u {name} ({timezone}).",
+        "par.invite_onboarding": (
+            "Zdravo! Da biste primali obaveštenja o «{event}» kod {organizer}, dodirnite dugme ispod:"
+        ),
         "btn_subscribe": "Pretplati se na {name}",
+        "btn_subscribe_short": "Pretplati se",
         "subscribed": "Pretplaćeni ste na {name}. Dodirnite 📅 Predstojeći da vidite događaje.",
         "usage_upcoming": "Upotreba: /upcoming [next|week|next_week|month]",
         "no_pending_confirm": "Nema događaja koji čekaju potvrdu.",

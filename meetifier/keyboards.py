@@ -229,6 +229,13 @@ def google_onboarding_keyboard(url: str, locale: str | None = None) -> InlineKey
     ]])
 
 
+def read_onboarding_keyboard(locale: str | None = None) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(locale, "btn_take_onboarding"), callback_data="o_tour_take")],
+        [InlineKeyboardButton(text=t(locale, "btn_skip_onboarding"), callback_data="o_tour_skip")],
+    ])
+
+
 def post_google_link_keyboard(locale: str | None = None) -> InlineKeyboardMarkup:
     b = lambda action: btn(ORG_BTN, action, locale)
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -237,6 +244,7 @@ def post_google_link_keyboard(locale: str | None = None) -> InlineKeyboardMarkup
             InlineKeyboardButton(text=b("new_calendar"), callback_data="o_onboard_calendar"),
         ],
         [InlineKeyboardButton(text=b("new_event"), callback_data="o_onboard_newevent")],
+        [InlineKeyboardButton(text=t(locale, "btn_skip_google"), callback_data="o_onboard_post_skip")],
     ])
 
 

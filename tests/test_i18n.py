@@ -68,6 +68,10 @@ def test_translation_parity_and_format():
     assert "Уведомление" in t("ru", "reminder", minutes=30, title="X", time="T", calendar="C")
     assert "Obaveštenje" in t("sr", "reminder", minutes=30, title="X", time="T", calendar="C")
     assert "подтверд" in t("ru", "confirm_request", hours=24, title="X", time="T", calendar="C").lower()
+    assert "Algebra" in t("en", "par.invite_onboarding", event="Algebra", organizer="Anna")
+    assert "Anna" in t("en", "par.invite_onboarding", event="Algebra", organizer="Anna")
+    assert "Help" in t("en", "org.onboarding_short")
+    assert "Take onboarding" == t("en", "btn_take_onboarding")
 
 
 def test_button_labels_cover_all_locales():
@@ -94,6 +98,25 @@ def test_menus_change_with_locale():
     assert ORG_BTN["language"]["ru"] in {btn.text for row in ru.keyboard for btn in row}
     par = participant_main_menu("sr")
     assert any(btn.text == PAR_BTN["language"]["sr"] for row in par.keyboard for btn in row)
+
+
+async def test_get_or_create_user_handles_create_race(tmp_path):
+    import asyncio
+
+    from meetifier.db import Database
+
+    db = Database(f"sqlite+aiosqlite:///{tmp_path}/race.db")
+    await db.init()
+
+    async def create_user() -> int:
+        async with db.sessions() as session:
+            user = await get_or_create_user(session, 77, 0)
+            await session.commit()
+            return user.id
+
+    ids = await asyncio.gather(create_user(), create_user())
+    assert ids[0] == ids[1]
+    await db.close()
 
 
 async def test_set_locale_persists(tmp_path):

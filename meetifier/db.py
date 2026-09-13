@@ -48,6 +48,7 @@ class User(Base):
     timezone: Mapped[int] = mapped_column(UtcOffsetHours, default=0)
     locale: Mapped[str] = mapped_column(String(8), default=DEFAULT_LOCALE)
     google_prompt_skipped: Mapped[bool] = mapped_column(Boolean, default=False)
+    org_onboarding_seen: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
