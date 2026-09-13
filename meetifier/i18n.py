@@ -74,7 +74,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "➕ New calendar — name + UTC offset + when to ask for attendance (default 24h)\n"
             "➕ New event — title, start, duration, recurrence; invite link shown when done\n"
             "📋 Events — next event, this week, next week, or this month\n"
-            "🔗 Invite — share a per-event Telegram link\n"
+            "🔗 Invite — share a link to join a specific event\n"
             "✏️ Reschedule — pick an event and set a new start time\n"
             "❌ Cancel event — cancel and notify subscribers\n"
             "✅ Confirmations — who confirmed attendance\n"
@@ -129,8 +129,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "usage_confirm_timing": "Usage: /confirm_timing CALENDAR_ID 24",
         "what_to_see": "What would you like to see?",
         "choose_calendar": "Choose a calendar:",
-        "choose_calendar_invite": "Choose a calendar:",
         "choose_event_invite": "Choose an event to invite to:",
+        "no_events_to_invite": "No upcoming events to invite to.",
         "share_event_invite": "Share this link for «{title}»:\n{url}",
         "btn_copy_invite_link": "📋 Copy invite link",
         "events_created_invite": (
@@ -363,7 +363,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "➕ Новый календарь — название, смещение UTC и когда спрашивать об участии (по умолчанию 24 ч)\n"
             "➕ Новое событие — название, время начала, длительность, недели (1 — разово, 2–52 — еженедельно)\n"
             "📋 События — следующее, эта неделя, следующая неделя или этот месяц\n"
-            "🔗 Пригласить — ссылка в Telegram для подписки\n"
+            "🔗 Пригласить — ссылка для присоединения к событию\n"
             "✏️ Перенести — выбрать событие и новое время\n"
             "❌ Отменить событие — отмена и уведомление подписчиков\n"
             "✅ Подтверждения — кто подтвердил участие\n"
@@ -418,8 +418,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "usage_confirm_timing": "Использование: /confirm_timing CALENDAR_ID 24",
         "what_to_see": "Что показать?",
         "choose_calendar": "Выберите календарь:",
-        "choose_calendar_invite": "Выберите календарь:",
         "choose_event_invite": "Выберите событие для приглашения:",
+        "no_events_to_invite": "Нет предстоящих событий для приглашения.",
         "share_event_invite": "Поделитесь ссылкой на «{title}»:\n{url}",
         "btn_copy_invite_link": "📋 Копировать ссылку",
         "events_created_invite": (
@@ -594,7 +594,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "/calendars\n"
             "/newevent CALENDAR_ID | Название | 2026-09-01 18:30 | МИНУТЫ | НЕДЕЛИ\n"
             "/events CALENDAR_ID [next|week|next_week|month]\n"
-            "/invite CALENDAR_ID\n"
+            "/invite EVENT_ID\n"
             "/reschedule EVENT_ID | 2026-09-02 19:00\n"
             "/cancel EVENT_ID\n"
             "/confirmations CALENDAR_ID\n"
@@ -652,7 +652,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "➕ Novi kalendar — naziv, UTC pomeraj i kada tražiti potvrdu prisustva (podrazumevano 24h)\n"
             "➕ Novi događaj — naslov, vreme početka, trajanje, nedelje (1 jednokratno, 2–52 nedeljno)\n"
             "📋 Događaji — sledeći, ova nedelja, sledeća nedelja ili ovaj mesec\n"
-            "🔗 Pozovi — Telegram link za pretplatu\n"
+            "🔗 Pozovi — link za pridruživanje događaju\n"
             "✏️ Pomeri — izaberite događaj i novo vreme\n"
             "❌ Otkaži događaj — otkazivanje i obaveštavanje pretplatnika\n"
             "✅ Potvrde — ko je potvrdio prisustvo\n"
@@ -707,8 +707,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "usage_confirm_timing": "Upotreba: /confirm_timing CALENDAR_ID 24",
         "what_to_see": "Šta želite da vidite?",
         "choose_calendar": "Izaberite kalendar:",
-        "choose_calendar_invite": "Izaberite kalendar:",
         "choose_event_invite": "Izaberite događaj za pozivnicu:",
+        "no_events_to_invite": "Nema predstojećih događaja za poziv.",
         "share_event_invite": "Podelite link za «{title}»:\n{url}",
         "btn_copy_invite_link": "📋 Kopiraj link pozivnice",
         "events_created_invite": (
@@ -883,7 +883,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "/calendars\n"
             "/newevent CALENDAR_ID | Naslov | 2026-09-01 18:30 | MINUTI | NEDELJE\n"
             "/events CALENDAR_ID [next|week|next_week|month]\n"
-            "/invite CALENDAR_ID\n"
+            "/invite EVENT_ID\n"
             "/reschedule EVENT_ID | 2026-09-02 19:00\n"
             "/cancel EVENT_ID\n"
             "/confirmations CALENDAR_ID\n"

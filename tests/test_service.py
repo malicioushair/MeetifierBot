@@ -9,8 +9,8 @@ from meetifier.recurrence import RecurrenceRule, generate_starts_utc
 from meetifier.service import (calendar_event_series, calendar_events, change_event, confirm_event,
                                confirmations_for_event, create_calendar, create_events, display_time,
                                event_occurrences, local_to_utc, make_invitation, month_bounds_utc,
-                               next_week_bounds_utc, parse_minutes, set_subscription_state, subscribe,
-                               week_bounds_utc)
+                               next_week_bounds_utc, owned_future_events, parse_minutes, set_subscription_state,
+                               subscribe, week_bounds_utc)
 from meetifier.worker import process_due_jobs
 
 
@@ -265,6 +265,16 @@ def test_month_bounds_utc():
     start, end = month_bounds_utc(0)
     assert start.day == 1
     assert (end - start).days in {28, 29, 30, 31}
+
+
+async def test_owned_future_events(db):
+    calendar = await prepared(db)
+    async with db.sessions() as session:
+        algebra = (await create_events(session, 100, calendar.id, "Algebra", "2030-01-01 18:00", 60, 3))[0]
+        await create_events(session, 100, calendar.id, "Past", "2020-01-01 18:00", 60)
+        rows = await owned_future_events(session, 100)
+    assert [event.title for event, _ in rows] == ["Algebra"]
+    assert rows[0][0].id == algebra.event_id
 
 
 async def test_calendar_event_series_and_occurrences(db):

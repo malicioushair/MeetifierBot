@@ -179,6 +179,27 @@ def event_series_keyboard(
     return attach_flow_nav(markup, locale, show_back=show_back) if with_nav else markup
 
 
+def owned_events_keyboard(
+    items: list[tuple[Event, Calendar]],
+    prefix: str,
+    locale: str | None = None,
+    *,
+    with_nav: bool = True,
+    show_back: bool = True,
+) -> InlineKeyboardMarkup:
+    multi_calendar = len({calendar.id for _, calendar in items}) > 1
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(
+                text=f"{event.title} ({calendar.name})" if multi_calendar else event.title,
+                callback_data=f"{prefix}:{event.id}",
+            )]
+            for event, calendar in items
+        ]
+    )
+    return attach_flow_nav(markup, locale, show_back=show_back) if with_nav else markup
+
+
 def subscribed_events_keyboard(
     events: list[Event],
     prefix: str,

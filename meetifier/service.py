@@ -172,6 +172,32 @@ async def calendar_event_series(session: AsyncSession, calendar_id: int, range_m
     return list((await session.scalars(query)).all())
 
 
+async def owned_future_events(session: AsyncSession, telegram_id: int) -> list[tuple[Event, Calendar]]:
+    """Owned event series with at least one upcoming occurrence, sorted by soonest."""
+    now = utcnow()
+    matching = (
+        select(EventOccurrence.event_id, func.min(EventOccurrence.start_utc).label("soonest"))
+        .join(Event)
+        .join(Calendar)
+        .join(User, Calendar.owner_user_id == User.id)
+        .where(
+            User.telegram_id == telegram_id,
+            Event.status == "active",
+            EventOccurrence.status == "active",
+            EventOccurrence.start_utc > now,
+        )
+        .group_by(EventOccurrence.event_id)
+        .subquery()
+    )
+    rows = await session.execute(
+        select(Event, Calendar)
+        .join(Calendar, Event.calendar_id == Calendar.id)
+        .join(matching, Event.id == matching.c.event_id)
+        .order_by(matching.c.soonest, Event.title)
+    )
+    return list(rows.tuples().all())
+
+
 async def event_occurrences(session: AsyncSession, event_id: int, range_mode: str = "future",
                             tz_offset_hours: int | str = 0, limit: int = 50) -> list[EventOccurrence]:
     """Upcoming (or in-range) occurrences for one event series."""

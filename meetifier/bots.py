@@ -18,8 +18,9 @@ from .keyboards import (DT_IGNORE, DT_PREFIX, FLOW_BACK_DATA, FLOW_CANCEL_DATA, 
                         google_calendars_keyboard, google_onboarding_keyboard, hour_keyboard, invite_link_keyboard,
                         locale_keyboard,
                         minute_keyboard, monthly_pos_keyboard, nav_texts, occurrences_keyboard, org_texts,
-                        organizer_main_menu, par_texts, participant_main_menu, recurrence_pattern_keyboard,
-                        subscribed_events_keyboard, weekday_pick_keyboard, weekdays_keyboard)
+                        organizer_main_menu, owned_events_keyboard, par_texts, participant_main_menu,
+                        recurrence_pattern_keyboard, subscribed_events_keyboard, weekday_pick_keyboard,
+                        weekdays_keyboard)
 from .flow import discard_flow
 from .google_sync import (adopt_google_calendar, authorization_url, create_oauth_state, get_google_account,
                           google_enabled, import_google_calendar, link_google_calendar, list_google_calendars,
@@ -28,8 +29,9 @@ from .recurrence import RecurrenceRule, parse_local_naive
 from .service import (MENU_EVENT_RANGE_MODES, calendar_event_series, calendar_events, change_event, confirm_event,
                       confirmations_for_event, confirmed_occurrence_ids, create_calendar, create_events,
                       dismiss_google_prompt, display_time, ensure_default_calendar, event_occurrences, get_user_locale,
-                      invitation_event, make_invitation, set_confirmation_hours, set_locale, set_reminders,
-                      set_subscription_state, set_timezone, should_show_google_onboarding, subscribe,
+                      invitation_event, make_invitation, owned_event, owned_future_events, set_confirmation_hours,
+                      set_locale,
+                      set_reminders, set_subscription_state, set_timezone, should_show_google_onboarding, subscribe,
                       upcoming_for_user_with_status)
 from .states import (OrganizerCancelEvent, OrganizerConfirmTiming, OrganizerConfirmations, OrganizerEvents,
                      OrganizerGoogleAdopt, OrganizerGoogleImport, OrganizerGoogleMap, OrganizerGoogleSync,
@@ -571,19 +573,8 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 edit_scope_keyboard("o_cancel_scope", locale),
                 locale, with_reply_nav=isinstance(target, Message),
             )
-        elif current == OrganizerInvite.calendar.state:
+        elif current == OrganizerInvite.event.state:
             await cancel()
-        elif current == OrganizerInvite.series.state:
-            calendar_id = data.get("calendar_id")
-            await state.set_state(OrganizerInvite.calendar)
-            await state.update_data(calendar_id=None)
-            async with db.sessions() as session:
-                rows = await fetch_owned_calendars(session, uid)
-            await prompt_inline(
-                target, t(locale, "choose_calendar_invite"),
-                calendars_keyboard(rows, "o_invite", locale, show_back=False),
-                locale, with_reply_nav=isinstance(target, Message),
-            )
         elif current == OrganizerEvents.range_pick.state:
             await cancel()
         elif current == OrganizerEvents.calendar.state:
@@ -1281,60 +1272,48 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             try:
                 event_id = int(command.args.strip())
                 async with db.sessions() as session:
-                    event = await session.get(Event, event_id)
+                    event = await owned_event(session, message.from_user.id, event_id)
+                    if not event:
+                        raise PermissionError("Event not found or not owned by you")
                     invitation = await make_invitation(session, message.from_user.id, event_id)
-                if not event:
-                    raise PermissionError("Event not found or not owned by you")
                 await send_invite_message(message, locale, event.title, invitation.token, clear_state=False)
                 await message.answer(t(locale, "main_menu"), reply_markup=organizer_main_menu(locale))
             except (ValueError, PermissionError) as exc:
                 await err(message, locale, exc)
             return
         await state.clear()
-        await state.set_state(OrganizerInvite.calendar)
-        await pick_calendar(message, "o_invite", "choose_calendar_invite", locale)
+        async with db.sessions() as session:
+            events = await owned_future_events(session, message.from_user.id)
+        if not events:
+            await message.answer(t(locale, "no_events_to_invite"), reply_markup=organizer_main_menu(locale))
+            return
+        await state.set_state(OrganizerInvite.event)
+        await prompt_inline(
+            message, t(locale, "choose_event_invite"),
+            owned_events_keyboard(events, "o_invite", locale, show_back=False),
+            locale, with_reply_nav=True,
+        )
 
     @router.callback_query(F.data.startswith("o_invite:"))
-    async def invite_pick_calendar(callback: CallbackQuery, state: FSMContext) -> None:
-        calendar_id = int(callback.data.split(":", 1)[1])
-        locale = await locale_for(callback.from_user.id)
-        async with db.sessions() as session:
-            series = await fetch_future_series(session, calendar_id)
-        if not series:
-            await state.clear()
-            await callback.message.edit_text(t(locale, "no_future_events"))
-            await restore_menu(callback, locale)
-            await callback.answer()
-            return
-        await state.update_data(calendar_id=calendar_id)
-        await state.set_state(OrganizerInvite.series)
-        await callback.message.edit_text(
-            t(locale, "choose_event_invite"),
-            reply_markup=event_series_keyboard(series, "o_invite_evt", locale),
-        )
-        await callback.answer()
-
-    @router.callback_query(F.data.startswith("o_invite_evt:"))
     async def invite_pick_event(callback: CallbackQuery, state: FSMContext) -> None:
         event_id = int(callback.data.split(":", 1)[1])
         locale = await locale_for(callback.from_user.id)
         try:
             async with db.sessions() as session:
-                event = await session.get(Event, event_id)
+                event = await owned_event(session, callback.from_user.id, event_id)
+                if not event:
+                    raise PermissionError("Event not found or not owned by you")
                 invitation = await make_invitation(session, callback.from_user.id, event_id)
-            if not event:
-                raise PermissionError("Event not found or not owned by you")
             await state.clear()
             await send_invite_message(callback, locale, event.title, invitation.token)
         except (ValueError, PermissionError) as exc:
-            calendar_id = (await state.get_data()).get("calendar_id")
             async with db.sessions() as session:
-                series = await fetch_future_series(session, int(calendar_id)) if calendar_id else []
+                events = await owned_future_events(session, callback.from_user.id)
             await callback.message.answer(t(locale, "error", error=exc))
-            if series:
+            if events:
                 await callback.message.answer(
                     t(locale, "choose_event_invite"),
-                    reply_markup=event_series_keyboard(series, "o_invite_evt", locale),
+                    reply_markup=owned_events_keyboard(events, "o_invite", locale),
                 )
             await callback.answer()
 

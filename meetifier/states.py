@@ -44,8 +44,7 @@ class OrganizerCancelEvent(StatesGroup):
 
 
 class OrganizerInvite(StatesGroup):
-    calendar = State()
-    series = State()
+    event = State()
 
 
 class OrganizerEvents(StatesGroup):
