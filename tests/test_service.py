@@ -8,8 +8,9 @@ from meetifier.db import Calendar, Database, Event, EventConfirmation, EventOccu
 from meetifier.recurrence import RecurrenceRule, generate_starts_utc
 from meetifier.service import (calendar_event_series, calendar_events, change_event, confirm_event,
                                confirmations_for_event, create_calendar, create_events, display_time,
-                               event_occurrences, local_to_utc, make_invitation, parse_minutes,
-                               set_subscription_state, subscribe, week_bounds_utc)
+                               event_occurrences, local_to_utc, make_invitation, month_bounds_utc,
+                               next_week_bounds_utc, parse_minutes, set_subscription_state, subscribe,
+                               week_bounds_utc)
 from meetifier.worker import process_due_jobs
 
 
@@ -253,6 +254,19 @@ def test_week_bounds_utc():
     assert end - start == timedelta(days=7)
 
 
+def test_next_week_bounds_utc():
+    week_start, week_end = week_bounds_utc(0)
+    next_start, next_end = next_week_bounds_utc(0)
+    assert next_start == week_end
+    assert next_end - next_start == timedelta(days=7)
+
+
+def test_month_bounds_utc():
+    start, end = month_bounds_utc(0)
+    assert start.day == 1
+    assert (end - start).days in {28, 29, 30, 31}
+
+
 async def test_calendar_event_series_and_occurrences(db):
     calendar = await prepared(db)
     async with db.sessions() as session:
@@ -286,6 +300,62 @@ async def test_calendar_events_week(db):
         with patch("meetifier.service.week_bounds_utc", return_value=bounds):
             week_all = await calendar_events(session, calendar.id, "week", calendar.timezone)
     assert len(week_all) == 2
+
+
+async def test_calendar_events_next_week(db):
+    calendar = await prepared(db)
+    async with db.sessions() as session:
+        await create_events(session, 100, calendar.id, "This week", "2030-01-03 18:00", 60)
+        upcoming = (await create_events(session, 100, calendar.id, "Next week", "2030-01-08 18:00", 60))[0]
+        await create_events(session, 100, calendar.id, "Later", "2030-01-15 18:00", 60)
+        week_bounds = (
+            local_to_utc("2030-01-01 00:00", calendar.timezone),
+            local_to_utc("2030-01-07 00:00", calendar.timezone),
+        )
+        next_bounds = (
+            local_to_utc("2030-01-07 00:00", calendar.timezone),
+            local_to_utc("2030-01-14 00:00", calendar.timezone),
+        )
+        with patch("meetifier.service.week_bounds_utc", return_value=week_bounds), patch(
+            "meetifier.service.next_week_bounds_utc", return_value=next_bounds,
+        ):
+            rows = await calendar_events(session, calendar.id, "next_week", calendar.timezone)
+    assert [o.id for o in rows] == [upcoming.id]
+
+
+async def test_calendar_events_month(db):
+    calendar = await prepared(db)
+    async with db.sessions() as session:
+        past = (await create_events(session, 100, calendar.id, "Past", "2030-01-01 10:00", 60))[0]
+        upcoming = (await create_events(session, 100, calendar.id, "Upcoming", "2030-01-20 18:00", 60))[0]
+        await create_events(session, 100, calendar.id, "Next month", "2030-02-01 18:00", 60)
+        month_bounds = (
+            local_to_utc("2030-01-01 00:00", calendar.timezone),
+            local_to_utc("2030-02-01 00:00", calendar.timezone),
+        )
+        now = local_to_utc("2030-01-02 12:00", calendar.timezone)
+        with patch("meetifier.service.month_bounds_utc", return_value=month_bounds), patch(
+            "meetifier.service.utcnow", return_value=now,
+        ):
+            rows = await calendar_events(session, calendar.id, "month", calendar.timezone)
+    assert [o.id for o in rows] == [upcoming.id]
+    assert past.id not in {o.id for o in rows}
+
+
+async def test_calendar_events_week_excludes_past(db):
+    calendar = await prepared(db)
+    async with db.sessions() as session:
+        past = (await create_events(session, 100, calendar.id, "Past", "2030-01-01 10:00", 60))[0]
+        upcoming = (await create_events(session, 100, calendar.id, "Upcoming", "2030-01-03 18:00", 60))[0]
+        await create_events(session, 100, calendar.id, "Next week", "2030-01-08 18:00", 60)
+        bounds = (local_to_utc("2030-01-01 00:00", calendar.timezone), local_to_utc("2030-01-07 00:00", calendar.timezone))
+        now = local_to_utc("2030-01-02 12:00", calendar.timezone)
+        with patch("meetifier.service.week_bounds_utc", return_value=bounds), patch(
+            "meetifier.service.utcnow", return_value=now,
+        ):
+            week_upcoming = await calendar_events(session, calendar.id, "week", calendar.timezone)
+    assert [o.id for o in week_upcoming] == [upcoming.id]
+    assert past.id not in {o.id for o in week_upcoming}
 
 
 async def test_worker_sends_and_records_delivery(db):

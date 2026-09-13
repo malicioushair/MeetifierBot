@@ -99,10 +99,16 @@ def locale_keyboard(prefix: str = "set_locale") -> InlineKeyboardMarkup:
 
 def event_range_keyboard(prefix: str, locale: str | None = None, *, with_nav: bool = True) -> InlineKeyboardMarkup:
     markup = InlineKeyboardMarkup(
-        inline_keyboard=[[
-            InlineKeyboardButton(text=t(locale, "btn_next_event"), callback_data=f"{prefix}:next"),
-            InlineKeyboardButton(text=t(locale, "btn_this_week"), callback_data=f"{prefix}:week"),
-        ]]
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=t(locale, "btn_next_event"), callback_data=f"{prefix}:next"),
+                InlineKeyboardButton(text=t(locale, "btn_this_week"), callback_data=f"{prefix}:week"),
+            ],
+            [
+                InlineKeyboardButton(text=t(locale, "btn_next_week"), callback_data=f"{prefix}:next_week"),
+                InlineKeyboardButton(text=t(locale, "btn_this_month"), callback_data=f"{prefix}:month"),
+            ],
+        ]
     )
     return attach_flow_nav(markup, locale, show_back=False) if with_nav else markup
 

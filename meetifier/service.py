@@ -75,6 +75,10 @@ def display_time(value: datetime, tz_offset_hours: int | str) -> str:
     return aware.strftime("%Y-%m-%d %H:%M") + f" ({format_timezone_offset(hours)})"
 
 
+EVENT_RANGE_MODES = frozenset({"next", "week", "next_week", "month", "future"})
+MENU_EVENT_RANGE_MODES = frozenset({"next", "week", "next_week", "month"})
+
+
 def week_bounds_utc(tz_offset_hours: int | str) -> tuple[datetime, datetime]:
     tz = tzinfo_from_offset(tz_offset_hours)
     now_local = datetime.now(tz)
@@ -86,19 +90,44 @@ def week_bounds_utc(tz_offset_hours: int | str) -> tuple[datetime, datetime]:
     )
 
 
+def next_week_bounds_utc(tz_offset_hours: int | str) -> tuple[datetime, datetime]:
+    _, week_end = week_bounds_utc(tz_offset_hours)
+    return week_end, week_end + timedelta(days=7)
+
+
+def month_bounds_utc(tz_offset_hours: int | str) -> tuple[datetime, datetime]:
+    tz = tzinfo_from_offset(tz_offset_hours)
+    now_local = datetime.now(tz)
+    month_start = now_local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if month_start.month == 12:
+        month_end = month_start.replace(year=month_start.year + 1, month=1)
+    else:
+        month_end = month_start.replace(month=month_start.month + 1)
+    return (
+        month_start.astimezone(timezone.utc).replace(tzinfo=None),
+        month_end.astimezone(timezone.utc).replace(tzinfo=None),
+    )
+
+
 def _apply_occurrence_range(query, range_mode: str, tz_offset_hours: int | str, now: datetime):
     if range_mode == "week":
-        start, end = week_bounds_utc(tz_offset_hours)
+        _, end = week_bounds_utc(tz_offset_hours)
+        return query.where(EventOccurrence.start_utc > now, EventOccurrence.start_utc < end)
+    if range_mode == "next_week":
+        start, end = next_week_bounds_utc(tz_offset_hours)
         return query.where(EventOccurrence.start_utc >= start, EventOccurrence.start_utc < end)
+    if range_mode == "month":
+        _, end = month_bounds_utc(tz_offset_hours)
+        return query.where(EventOccurrence.start_utc > now, EventOccurrence.start_utc < end)
     if range_mode in {"next", "future"}:
         return query.where(EventOccurrence.start_utc > now)
-    raise ValueError("Range must be 'next', 'week', or 'future'")
+    raise ValueError(f"Range must be one of: {', '.join(sorted(EVENT_RANGE_MODES))}")
 
 
 async def calendar_events(session: AsyncSession, calendar_id: int, range_mode: str,
                           tz_offset_hours: int | str) -> list[EventOccurrence]:
-    if range_mode not in {"next", "week"}:
-        raise ValueError("Range must be 'next' or 'week'")
+    if range_mode not in MENU_EVENT_RANGE_MODES:
+        raise ValueError(f"Range must be one of: {', '.join(sorted(MENU_EVENT_RANGE_MODES))}")
     now = utcnow()
     query = (
         select(EventOccurrence)
@@ -120,8 +149,8 @@ async def calendar_events(session: AsyncSession, calendar_id: int, range_mode: s
 async def calendar_event_series(session: AsyncSession, calendar_id: int, range_mode: str = "future",
                                 tz_offset_hours: int | str = 0) -> list[Event]:
     """Event series in a calendar that have at least one occurrence in the given range."""
-    if range_mode not in {"next", "week", "future"}:
-        raise ValueError("Range must be 'next', 'week', or 'future'")
+    if range_mode not in EVENT_RANGE_MODES:
+        raise ValueError(f"Range must be one of: {', '.join(sorted(EVENT_RANGE_MODES))}")
     now = utcnow()
     matching = (
         select(EventOccurrence.event_id, func.min(EventOccurrence.start_utc).label("soonest"))
@@ -146,8 +175,8 @@ async def calendar_event_series(session: AsyncSession, calendar_id: int, range_m
 async def event_occurrences(session: AsyncSession, event_id: int, range_mode: str = "future",
                             tz_offset_hours: int | str = 0, limit: int = 50) -> list[EventOccurrence]:
     """Upcoming (or in-range) occurrences for one event series."""
-    if range_mode not in {"next", "week", "future"}:
-        raise ValueError("Range must be 'next', 'week', or 'future'")
+    if range_mode not in EVENT_RANGE_MODES:
+        raise ValueError(f"Range must be one of: {', '.join(sorted(EVENT_RANGE_MODES))}")
     now = utcnow()
     query = (
         select(EventOccurrence)
@@ -459,8 +488,8 @@ async def change_event(
 
 async def upcoming_for_user(session: AsyncSession, telegram_id: int, range_mode: str = "week",
                             default_tz: int | str = 0, limit: int = 50) -> list[tuple[EventOccurrence, Calendar]]:
-    if range_mode not in {"next", "week", "future"}:
-        raise ValueError("Range must be 'next', 'week', or 'future'")
+    if range_mode not in EVENT_RANGE_MODES:
+        raise ValueError(f"Range must be one of: {', '.join(sorted(EVENT_RANGE_MODES))}")
     user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
     tz = user.timezone if user else default_tz
     now = utcnow()
@@ -478,15 +507,12 @@ async def upcoming_for_user(session: AsyncSession, telegram_id: int, range_mode:
             EventOccurrence.status == "active",
         )
     )
+    query = _apply_occurrence_range(query, range_mode, tz, now)
+    query = query.order_by(EventOccurrence.start_utc)
     if range_mode == "next":
-        query = query.where(EventOccurrence.start_utc > now).order_by(EventOccurrence.start_utc).limit(1)
-    elif range_mode == "week":
-        start, end = week_bounds_utc(tz)
-        query = query.where(
-            EventOccurrence.start_utc >= start, EventOccurrence.start_utc < end,
-        ).order_by(EventOccurrence.start_utc).limit(limit)
+        query = query.limit(1)
     else:
-        query = query.where(EventOccurrence.start_utc > now).order_by(EventOccurrence.start_utc).limit(limit)
+        query = query.limit(limit)
     rows = await session.execute(query)
     return list(rows.tuples())
 

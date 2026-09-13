@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from .config import Settings, format_timezone_offset, validate_timezone
 from .db import Calendar, Database, Event, EventOccurrence, GoogleCalendarLink, Subscription, User
-from .i18n import LOCALES, normalize_locale, t
+from .i18n import LOCALES, no_events_message, normalize_locale, t
 from .keyboards import (DT_IGNORE, DT_PREFIX, FLOW_BACK_DATA, FLOW_CANCEL_DATA, ORG_INPUT_BLOCKLIST,
                         PAR_INPUT_BLOCKLIST, calendars_keyboard, confirm_cancel_keyboard,
                         confirm_google_adoption_keyboard, date_calendar_keyboard, edit_scope_keyboard,
@@ -25,11 +25,12 @@ from .google_sync import (adopt_google_calendar, authorization_url, create_oauth
                           google_enabled, import_google_calendar, link_google_calendar, list_google_calendars,
                           sync_changed_event, sync_created_events, sync_google_calendar)
 from .recurrence import RecurrenceRule, parse_local_naive
-from .service import (calendar_event_series, calendar_events, change_event, confirm_event, confirmations_for_event,
-                      confirmed_occurrence_ids, create_calendar, create_events, dismiss_google_prompt, display_time,
-                      ensure_default_calendar, event_occurrences, get_user_locale, invitation_event, make_invitation,
-                      set_confirmation_hours, set_locale, set_reminders, set_subscription_state, set_timezone,
-                      should_show_google_onboarding, subscribe, upcoming_for_user_with_status)
+from .service import (MENU_EVENT_RANGE_MODES, calendar_event_series, calendar_events, change_event, confirm_event,
+                      confirmations_for_event, confirmed_occurrence_ids, create_calendar, create_events,
+                      dismiss_google_prompt, display_time, ensure_default_calendar, event_occurrences, get_user_locale,
+                      invitation_event, make_invitation, set_confirmation_hours, set_locale, set_reminders,
+                      set_subscription_state, set_timezone, should_show_google_onboarding, subscribe,
+                      upcoming_for_user_with_status)
 from .states import (OrganizerCancelEvent, OrganizerConfirmTiming, OrganizerConfirmations, OrganizerEvents,
                      OrganizerGoogleAdopt, OrganizerGoogleImport, OrganizerGoogleMap, OrganizerGoogleSync,
                      OrganizerInvite, OrganizerNewCalendar, OrganizerNewEvent, OrganizerReschedule,
@@ -112,7 +113,7 @@ def occurrence_button_items(occurrences: list[EventOccurrence], timezone_offset:
 
 def format_organizer_events(occurrences: list[EventOccurrence], calendar: Calendar, range_mode: str, locale: str) -> str:
     if not occurrences:
-        return t(locale, "no_events_week" if range_mode == "week" else "no_events_upcoming")
+        return no_events_message(locale, range_mode)
     return "\n".join(
         f"{occ.id}: {occ.event.title} — {display_time(occ.start_utc, calendar.timezone)} [{occ.status}]"
         for occ in occurrences
@@ -123,7 +124,7 @@ def format_series_occurrences(event: Event, occurrences: list[EventOccurrence], 
                               range_mode: str, locale: str, *, with_confirm: bool = False,
                               confirmed_ids: set[int] | None = None) -> str:
     if not occurrences:
-        return t(locale, "no_events_week" if range_mode == "week" else "no_events_upcoming")
+        return no_events_message(locale, range_mode)
     confirmed_ids = confirmed_ids or set()
     lines = [t(locale, "event_dates_header", title=event.title)]
     for occ in occurrences:
@@ -137,7 +138,7 @@ def format_series_occurrences(event: Event, occurrences: list[EventOccurrence], 
 def format_participant_events(rows: list[tuple[EventOccurrence, Calendar, bool]], timezone_name: str, range_mode: str,
                               locale: str) -> str:
     if not rows:
-        return t(locale, "no_events_week" if range_mode == "week" else "no_events_upcoming")
+        return no_events_message(locale, range_mode)
     lines = []
     for occurrence, calendar, confirmed in rows:
         status = " ✅" if confirmed else ""
@@ -833,8 +834,9 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             try:
                 calendar_id = int(parts[0])
                 range_mode = parts[1].lower() if len(parts) > 1 else "week"
-                if range_mode not in {"next", "week"}:
-                    raise ValueError("Range must be 'next' or 'week'")
+                if range_mode not in MENU_EVENT_RANGE_MODES:
+                    raise ValueError(
+                        f"Range must be one of: {', '.join(sorted(MENU_EVENT_RANGE_MODES))}")
                 async with db.sessions() as session:
                     calendar = await session.scalar(select(Calendar).join(User).where(
                         Calendar.id == calendar_id, User.telegram_id == message.from_user.id))
@@ -872,8 +874,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 series = await fetch_future_series(session, calendar.id, range_mode, calendar.timezone)
                 if not series:
                     await state.clear()
-                    await callback.message.edit_text(
-                        t(locale, "no_events_week" if range_mode == "week" else "no_events_upcoming"))
+                    await callback.message.edit_text(no_events_message(locale, range_mode))
                     await restore_menu(callback, locale)
                     await callback.answer()
                     return
@@ -900,8 +901,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             series = await fetch_future_series(session, calendar.id, range_mode, calendar.timezone)
         if not series:
             await state.clear()
-            await callback.message.edit_text(
-                t(locale, "no_events_week" if range_mode == "week" else "no_events_upcoming"))
+            await callback.message.edit_text(no_events_message(locale, range_mode))
             await restore_menu(callback, locale)
             await callback.answer()
             return
@@ -2241,7 +2241,7 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
         locale = await locale_for(message.from_user.id)
         if command and command.args:
             range_mode = command.args.strip().lower()
-            if range_mode not in {"next", "week"}:
+            if range_mode not in MENU_EVENT_RANGE_MODES:
                 await message.answer(t(locale, "usage_upcoming"), reply_markup=participant_main_menu(locale))
                 return
             await reply_upcoming(message, range_mode, locale)

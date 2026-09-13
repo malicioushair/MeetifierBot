@@ -73,7 +73,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "📅 Calendars — list your calendars (power users can add more)\n"
             "➕ New calendar — name + UTC offset + when to ask for attendance (default 24h)\n"
             "➕ New event — title, start, duration, recurrence; invite link shown when done\n"
-            "📋 Events — next event or this week\n"
+            "📋 Events — next event, this week, next week, or this month\n"
             "🔗 Invite — share a per-event Telegram link\n"
             "✏️ Reschedule — pick an event and set a new start time\n"
             "❌ Cancel event — cancel and notify subscribers\n"
@@ -92,7 +92,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "4. Check upcoming events and confirm attendance when asked\n"
             "5. Mute or unsubscribe when you no longer need an event\n\n"
             "Menu features\n"
-            "📅 Upcoming — next event or this week\n"
+            "📅 Upcoming — next event, this week, next week, or this month\n"
             "✅ Confirm — mark that you will attend\n"
             "📋 Subscriptions — events you follow\n"
             "🌍 Timezone — UTC offset in hours used for how times are shown to you\n"
@@ -151,6 +151,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "event_dates_header": "{title}:",
         "no_future_events": "No future events in this calendar.",
         "no_events_week": "No events for this week.",
+        "no_events_next_week": "No events for next week.",
+        "no_events_month": "No events for this month.",
         "no_events_upcoming": "No upcoming events.",
         "enter_event_title": "Enter event title:",
         "enter_start_time": "Pick a start date (or type YYYY-MM-DD HH:MM):",
@@ -247,6 +249,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "calendar_not_owned": "Calendar not found or not owned by you.",
         "btn_next_event": "Next event",
         "btn_this_week": "This week",
+        "btn_next_week": "Next week",
+        "btn_this_month": "This month",
         "btn_google_cal": "Google calendar #{n}",
         "btn_notify_attendees": "Notify Google attendees",
         "btn_cancel": "Cancel",
@@ -269,7 +273,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "invited_to": "You were invited to «{name}» ({timezone}).",
         "btn_subscribe": "Subscribe to {name}",
         "subscribed": "Subscribed to «{name}». Tap 📅 Upcoming to see your dates.",
-        "usage_upcoming": "Usage: /upcoming [next|week]",
+        "usage_upcoming": "Usage: /upcoming [next|week|next_week|month]",
         "no_pending_confirm": "No events waiting for confirmation.",
         "tap_to_confirm": "Tap a date to confirm attendance:",
         "choose_calendar_confirm": "Choose an event to confirm attendance:",
@@ -300,7 +304,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "/newcalendar Name | 3 [| 24]\n"
             "/calendars\n"
             "/newevent CALENDAR_ID | Title | 2026-09-01 18:30 | DURATION_MINUTES | WEEKS\n            (WEEKS kept for simple weekly; use the menu for Mon+Wed, every 2nd week, first Tuesday, …)\n"
-            "/events CALENDAR_ID [next|week]\n"
+            "/events CALENDAR_ID [next|week|next_week|month]\n"
             "/invite EVENT_ID\n"
             "/reschedule EVENT_ID | 2026-09-02 19:00\n"
             "/cancel EVENT_ID\n"
@@ -313,7 +317,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "par.help": (
             "Use the menu buttons below, or type commands directly:\n\n"
-            "/upcoming [next|week] - upcoming events\n"
+            "/upcoming [next|week|next_week|month] - upcoming events\n"
             "/confirm EVENT_ID - confirm attendance\n"
             "/timezone 3\n"
             "/reminders EVENT_ID 60\n"
@@ -358,7 +362,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "📅 Календари — список ваших календарей\n"
             "➕ Новый календарь — название, смещение UTC и когда спрашивать об участии (по умолчанию 24 ч)\n"
             "➕ Новое событие — название, время начала, длительность, недели (1 — разово, 2–52 — еженедельно)\n"
-            "📋 События — следующее или на этой неделе\n"
+            "📋 События — следующее, эта неделя, следующая неделя или этот месяц\n"
             "🔗 Пригласить — ссылка в Telegram для подписки\n"
             "✏️ Перенести — выбрать событие и новое время\n"
             "❌ Отменить событие — отмена и уведомление подписчиков\n"
@@ -377,7 +381,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "4. Смотрите ближайшие события и подтверждайте участие по запросу\n"
             "5. Отключайте звук или отписывайтесь, когда календарь больше не нужен\n\n"
             "Кнопки меню\n"
-            "📅 Ближайшие — следующее событие или эта неделя\n"
+            "📅 Ближайшие — следующее, эта неделя, следующая неделя или этот месяц\n"
             "✅ Подтвердить — отметить, что вы придёте\n"
             "📋 Подписки — календари, на которые вы подписаны\n"
             "🌍 Часовой пояс — смещение UTC в часах для отображения времени\n"
@@ -436,6 +440,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "event_dates_header": "{title}:",
         "no_future_events": "В этом календаре нет будущих событий.",
         "no_events_week": "На этой неделе событий нет.",
+        "no_events_next_week": "На следующей неделе событий нет.",
+        "no_events_month": "В этом месяце событий нет.",
         "no_events_upcoming": "Нет ближайших событий.",
         "enter_event_title": "Введите название события:",
         "enter_start_time": "Выберите дату начала (или введите ГГГГ-ММ-ДД ЧЧ:ММ):",
@@ -532,6 +538,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "calendar_not_owned": "Календарь не найден или вам не принадлежит.",
         "btn_next_event": "Следующее",
         "btn_this_week": "Эта неделя",
+        "btn_next_week": "Следующая неделя",
+        "btn_this_month": "Этот месяц",
         "btn_google_cal": "Календарь Google #{n}",
         "btn_notify_attendees": "Уведомить участников Google",
         "btn_cancel": "Отмена",
@@ -554,7 +562,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "invited_to": "Вас пригласили в «{name}» ({timezone}).",
         "btn_subscribe": "Подписаться на {name}",
         "subscribed": "Вы подписались на «{name}». Нажмите 📅 Ближайшие, чтобы увидеть события.",
-        "usage_upcoming": "Использование: /upcoming [next|week]",
+        "usage_upcoming": "Использование: /upcoming [next|week|next_week|month]",
         "no_pending_confirm": "Нет событий, ожидающих подтверждения.",
         "tap_to_confirm": "Нажмите на дату, чтобы подтвердить участие:",
         "choose_calendar_confirm": "Выберите календарь для подтверждения участия:",
@@ -585,7 +593,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "/newcalendar Название | 3 [| 24]\n"
             "/calendars\n"
             "/newevent CALENDAR_ID | Название | 2026-09-01 18:30 | МИНУТЫ | НЕДЕЛИ\n"
-            "/events CALENDAR_ID [next|week]\n"
+            "/events CALENDAR_ID [next|week|next_week|month]\n"
             "/invite CALENDAR_ID\n"
             "/reschedule EVENT_ID | 2026-09-02 19:00\n"
             "/cancel EVENT_ID\n"
@@ -598,7 +606,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "par.help": (
             "Используйте кнопки меню ниже или команды:\n\n"
-            "/upcoming [next|week] — ближайшие события\n"
+            "/upcoming [next|week|next_week|month] — ближайшие события\n"
             "/confirm EVENT_ID — подтвердить участие\n"
             "/timezone 3\n"
             "/reminders CALENDAR_ID 60\n"
@@ -643,7 +651,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "📅 Kalendari — lista vaših kalendara\n"
             "➕ Novi kalendar — naziv, UTC pomeraj i kada tražiti potvrdu prisustva (podrazumevano 24h)\n"
             "➕ Novi događaj — naslov, vreme početka, trajanje, nedelje (1 jednokratno, 2–52 nedeljno)\n"
-            "📋 Događaji — sledeći ili ova nedelja\n"
+            "📋 Događaji — sledeći, ova nedelja, sledeća nedelja ili ovaj mesec\n"
             "🔗 Pozovi — Telegram link za pretplatu\n"
             "✏️ Pomeri — izaberite događaj i novo vreme\n"
             "❌ Otkaži događaj — otkazivanje i obaveštavanje pretplatnika\n"
@@ -662,7 +670,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "4. Pregledajte predstojeće događaje i potvrdite prisustvo kada vas pitaju\n"
             "5. Isključite obaveštenja ili otkažite pretplatu kad kalendar više nije potreban\n\n"
             "Funkcije menija\n"
-            "📅 Predstojeći — sledeći događaj ili ova nedelja\n"
+            "📅 Predstojeći — sledeći, ova nedelja, sledeća nedelja ili ovaj mesec\n"
             "✅ Potvrdi — označite da ćete doći\n"
             "📋 Pretplate — kalendari koje pratite\n"
             "🌍 Vremenska zona — UTC pomeraj u satima za prikaz vremena\n"
@@ -721,6 +729,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "event_dates_header": "{title}:",
         "no_future_events": "Nema budućih događaja u ovom kalendaru.",
         "no_events_week": "Nema događaja za ovu nedelju.",
+        "no_events_next_week": "Nema događaja za sledeću nedelju.",
+        "no_events_month": "Nema događaja za ovaj mesec.",
         "no_events_upcoming": "Nema predstojećih događaja.",
         "enter_event_title": "Unesite naslov događaja:",
         "enter_start_time": "Izaberite datum početka (ili unesite GGGG-MM-DD ČČ:MM):",
@@ -817,6 +827,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "calendar_not_owned": "Kalendar nije pronađen ili vam ne pripada.",
         "btn_next_event": "Sledeći događaj",
         "btn_this_week": "Ova nedelja",
+        "btn_next_week": "Sledeća nedelja",
+        "btn_this_month": "Ovaj mesec",
         "btn_google_cal": "Google kalendar #{n}",
         "btn_notify_attendees": "Obavesti Google učesnike",
         "btn_cancel": "Otkaži",
@@ -839,7 +851,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "invited_to": "Pozvani ste u {name} ({timezone}).",
         "btn_subscribe": "Pretplati se na {name}",
         "subscribed": "Pretplaćeni ste na {name}. Dodirnite 📅 Predstojeći da vidite događaje.",
-        "usage_upcoming": "Upotreba: /upcoming [next|week]",
+        "usage_upcoming": "Upotreba: /upcoming [next|week|next_week|month]",
         "no_pending_confirm": "Nema događaja koji čekaju potvrdu.",
         "tap_to_confirm": "Dodirnite datum da potvrdite prisustvo:",
         "choose_calendar_confirm": "Izaberite kalendar za potvrdu prisustva:",
@@ -870,7 +882,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "/newcalendar Naziv | 1 [| 24]\n"
             "/calendars\n"
             "/newevent CALENDAR_ID | Naslov | 2026-09-01 18:30 | MINUTI | NEDELJE\n"
-            "/events CALENDAR_ID [next|week]\n"
+            "/events CALENDAR_ID [next|week|next_week|month]\n"
             "/invite CALENDAR_ID\n"
             "/reschedule EVENT_ID | 2026-09-02 19:00\n"
             "/cancel EVENT_ID\n"
@@ -883,7 +895,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "par.help": (
             "Koristite dugmad menija ispod ili komande:\n\n"
-            "/upcoming [next|week] - predstojeći događaji\n"
+            "/upcoming [next|week|next_week|month] - predstojeći događaji\n"
             "/confirm EVENT_ID - potvrdi prisustvo\n"
             "/timezone 1\n"
             "/reminders CALENDAR_ID 60\n"
@@ -924,6 +936,17 @@ def t(locale: str | None, key: str, **kwargs: Any) -> str:
     if template is None:
         template = MESSAGES[DEFAULT_LOCALE].get(key, key)
     return template.format(**kwargs) if kwargs else template
+
+
+NO_EVENTS_KEYS = {
+    "week": "no_events_week",
+    "next_week": "no_events_next_week",
+    "month": "no_events_month",
+}
+
+
+def no_events_message(locale: str | None, range_mode: str) -> str:
+    return t(locale, NO_EVENTS_KEYS.get(range_mode, "no_events_upcoming"))
 
 
 def btn(labels: dict[str, dict[str, str]], action: str, locale: str | None) -> str:
