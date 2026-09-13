@@ -3,7 +3,7 @@ from __future__ import annotations
 import calendar as cal_mod
 from datetime import date
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+from aiogram.types import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
 from .db import Calendar, Event
 from .i18n import LOCALES, LOCALE_LABELS, NAV_BTN, ORG_BTN, PAR_BTN, all_btn_texts, btn, t
@@ -171,6 +171,26 @@ def event_series_keyboard(
         ]
     )
     return attach_flow_nav(markup, locale, show_back=show_back) if with_nav else markup
+
+
+def subscribed_events_keyboard(
+    events: list[Event],
+    prefix: str,
+    locale: str | None = None,
+    *,
+    with_nav: bool = True,
+    show_back: bool = True,
+) -> InlineKeyboardMarkup:
+    return event_series_keyboard(events, prefix, locale, with_nav=with_nav, show_back=show_back)
+
+
+def invite_link_keyboard(url: str, locale: str | None = None) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text=t(locale, "btn_copy_invite_link"),
+            copy_text=CopyTextButton(text=url),
+        ),
+    ]])
 
 
 def occurrences_keyboard(

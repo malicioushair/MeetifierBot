@@ -48,16 +48,19 @@ def test_parse_minutes():
 
 async def prepared(db):
     async with db.sessions() as session:
-        calendar = await create_calendar(session, 100, "Math", 3, 0)
-        invite = await make_invitation(session, 100, calendar.id)
-        await subscribe(session, 200, invite.token, 0)
-        return calendar
+        return await create_calendar(session, 100, "Math", 3, 0)
+
+
+async def subscribe_participant(session, owner_id: int, participant_id: int, event_id: int) -> None:
+    invite = await make_invitation(session, owner_id, event_id)
+    await subscribe(session, participant_id, invite.token, 0)
 
 
 async def test_weekly_events_and_durable_jobs(db):
     calendar = await prepared(db)
     async with db.sessions() as session:
         occurrences = await create_events(session, 100, calendar.id, "Algebra", "2030-01-01 18:00", 60, 3)
+        await subscribe_participant(session, 100, 200, occurrences[0].event_id)
         jobs = (await session.scalars(select(NotificationJob))).all()
         events = (await session.scalars(select(Event))).all()
     assert len(occurrences) == 3
@@ -76,8 +79,9 @@ async def test_participant_notification_override(db):
 
     calendar = await prepared(db)
     async with db.sessions() as session:
-        await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60)
-        await set_reminders(session, 200, calendar.id, "30")
+        occurrences = await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60)
+        await subscribe_participant(session, 100, 200, occurrences[0].event_id)
+        await set_reminders(session, 200, occurrences[0].event_id, "30")
         jobs = (await session.scalars(select(NotificationJob).where(
             NotificationJob.state == "pending"))).all()
     kinds = sorted(job.kind for job in jobs)
@@ -89,7 +93,8 @@ async def test_organizer_confirmation_timing(db):
 
     calendar = await prepared(db)
     async with db.sessions() as session:
-        await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60)
+        occurrences = await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60)
+        await subscribe_participant(session, 100, 200, occurrences[0].event_id)
         await set_confirmation_hours(session, 100, calendar.id, "2")
         jobs = (await session.scalars(select(NotificationJob).where(
             NotificationJob.state == "pending"))).all()
@@ -102,8 +107,9 @@ async def test_organizer_confirmation_timing(db):
 async def test_mute_skips_only_participant_notifications(db):
     calendar = await prepared(db)
     async with db.sessions() as session:
-        await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60)
-        await set_subscription_state(session, 200, calendar.id, "mute")
+        occurrences = await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60)
+        await subscribe_participant(session, 100, 200, occurrences[0].event_id)
+        await set_subscription_state(session, 200, occurrences[0].event_id, "mute")
         for job in (await session.scalars(select(NotificationJob))).all():
             job.scheduled_at = utcnow()
         await session.commit()
@@ -158,7 +164,9 @@ async def test_create_with_recurrence_rule(db):
 async def test_reschedule_invalidates_old_jobs(db):
     calendar = await prepared(db)
     async with db.sessions() as session:
-        occurrence = (await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60))[0]
+        occurrences = await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60)
+        await subscribe_participant(session, 100, 200, occurrences[0].event_id)
+        occurrence = occurrences[0]
         occurrence_id = occurrence.id
         changed = await change_event(session, 100, occurrence_id, "2030-01-02 19:00")
         jobs = (await session.scalars(select(NotificationJob).where(
@@ -173,6 +181,7 @@ async def test_change_following_shifts_series(db):
     calendar = await prepared(db)
     async with db.sessions() as session:
         occurrences = await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60, 3)
+        await subscribe_participant(session, 100, 200, occurrences[0].event_id)
         first_id = occurrences[0].id
         original_seconds = [o.start_utc for o in occurrences]
         changed = await change_event(session, 100, first_id, "2030-01-01 19:00", scope="following")
@@ -189,6 +198,7 @@ async def test_cancel_following(db):
     calendar = await prepared(db)
     async with db.sessions() as session:
         occurrences = await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60, 3)
+        await subscribe_participant(session, 100, 200, occurrences[0].event_id)
         changed = await change_event(session, 100, occurrences[1].id, cancel=True, scope="following")
         assert len(changed) == 2
         rows = list((await session.scalars(
@@ -203,9 +213,10 @@ async def test_cancel_following(db):
 async def test_unsubscribe_obsoletes_jobs(db):
     calendar = await prepared(db)
     async with db.sessions() as session:
-        await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60)
-        assert await set_subscription_state(session, 200, calendar.id, "unsubscribe")
-        sub = await session.scalar(select(Subscription).where(Subscription.calendar_id == calendar.id))
+        occurrences = await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60)
+        await subscribe_participant(session, 100, 200, occurrences[0].event_id)
+        assert await set_subscription_state(session, 200, occurrences[0].event_id, "unsubscribe")
+        sub = await session.scalar(select(Subscription).where(Subscription.event_id == occurrences[0].event_id))
         jobs = (await session.scalars(select(NotificationJob))).all()
     assert not sub.active
     assert all(job.state == "obsolete" for job in jobs)
@@ -214,7 +225,9 @@ async def test_unsubscribe_obsoletes_jobs(db):
 async def test_confirm_event_notifies_organizer_data(db):
     calendar = await prepared(db)
     async with db.sessions() as session:
-        occurrence = (await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60))[0]
+        occurrences = await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60)
+        await subscribe_participant(session, 100, 200, occurrences[0].event_id)
+        occurrence = occurrences[0]
         occurrence_id = occurrence.id
         confirmed, _, owner, created = await confirm_event(session, 200, occurrence_id, "Alice", 0)
         again, _, _, created_again = await confirm_event(session, 200, occurrence_id, "Alice", 0)
@@ -226,7 +239,9 @@ async def test_confirm_event_notifies_organizer_data(db):
 async def test_confirmations_cleared_on_reschedule(db):
     calendar = await prepared(db)
     async with db.sessions() as session:
-        occurrence = (await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60))[0]
+        occurrences = await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60)
+        await subscribe_participant(session, 100, 200, occurrences[0].event_id)
+        occurrence = occurrences[0]
         await confirm_event(session, 200, occurrence.id, "Alice", 0)
         await change_event(session, 100, occurrence.id, "2030-01-02 19:00")
         rows = await confirmations_for_event(session, 100, occurrence.id)
@@ -276,7 +291,8 @@ async def test_calendar_events_week(db):
 async def test_worker_sends_and_records_delivery(db):
     calendar = await prepared(db)
     async with db.sessions() as session:
-        await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60)
+        occurrences = await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60)
+        await subscribe_participant(session, 100, 200, occurrences[0].event_id)
         job = await session.scalar(select(NotificationJob).where(NotificationJob.kind == "confirm:24"))
         job_id = job.id
         job.scheduled_at = utcnow()
@@ -295,7 +311,8 @@ async def test_worker_sends_and_records_delivery(db):
 async def test_worker_sends_participant_notification_without_confirm_button(db):
     calendar = await prepared(db)
     async with db.sessions() as session:
-        await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60)
+        occurrences = await create_events(session, 100, calendar.id, "Class", "2030-01-01 18:00", 60)
+        await subscribe_participant(session, 100, 200, occurrences[0].event_id)
         job = await session.scalar(select(NotificationJob).where(NotificationJob.kind == "reminder:60"))
         job_id = job.id
         job.scheduled_at = utcnow()

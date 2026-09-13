@@ -15,19 +15,19 @@ from .keyboards import (DT_IGNORE, DT_PREFIX, FLOW_BACK_DATA, FLOW_CANCEL_DATA, 
                         PAR_INPUT_BLOCKLIST, calendars_keyboard, confirm_cancel_keyboard,
                         confirm_google_adoption_keyboard, date_calendar_keyboard, edit_scope_keyboard,
                         event_confirm_keyboard, event_range_keyboard, event_series_keyboard, flow_nav_keyboard,
-                        google_calendars_keyboard, hour_keyboard, locale_keyboard, minute_keyboard,
-                        monthly_pos_keyboard, nav_texts, occurrences_keyboard, org_texts, organizer_main_menu,
-                        par_texts, participant_main_menu, recurrence_pattern_keyboard, weekday_pick_keyboard,
-                        weekdays_keyboard)
+                        google_calendars_keyboard, hour_keyboard, invite_link_keyboard, locale_keyboard,
+                        minute_keyboard, monthly_pos_keyboard, nav_texts, occurrences_keyboard, org_texts,
+                        organizer_main_menu, par_texts, participant_main_menu, recurrence_pattern_keyboard,
+                        subscribed_events_keyboard, weekday_pick_keyboard, weekdays_keyboard)
 from .flow import discard_flow
 from .google_sync import (adopt_google_calendar, authorization_url, create_oauth_state, get_google_account,
                           google_enabled, import_google_calendar, link_google_calendar, list_google_calendars,
                           sync_changed_event, sync_created_events, sync_google_calendar)
 from .recurrence import RecurrenceRule, parse_local_naive
 from .service import (calendar_event_series, calendar_events, change_event, confirm_event, confirmations_for_event,
-                      confirmed_occurrence_ids, create_calendar, create_events, display_time, event_occurrences,
-                      get_user_locale, invitation_calendar, make_invitation, set_confirmation_hours, set_locale,
-                      set_reminders, set_subscription_state, set_timezone, subscribe,
+                      confirmed_occurrence_ids, create_calendar, create_events, display_time, ensure_default_calendar,
+                      event_occurrences, get_user_locale, invitation_event, make_invitation, set_confirmation_hours,
+                      set_locale, set_reminders, set_subscription_state, set_timezone, subscribe,
                       upcoming_for_user_with_status)
 from .states import (OrganizerCancelEvent, OrganizerConfirmTiming, OrganizerConfirmations, OrganizerEvents,
                      OrganizerGoogleAdopt, OrganizerGoogleImport, OrganizerGoogleMap, OrganizerGoogleSync,
@@ -62,40 +62,36 @@ async def fetch_future_series(session, calendar_id: int, range_mode: str = "futu
     return await calendar_event_series(session, calendar_id, range_mode, tz_offset_hours)
 
 
-async def fetch_subscribed_calendars(session, telegram_id: int) -> list[tuple[Calendar, Subscription]]:
+async def fetch_subscribed_events(session, telegram_id: int) -> list[tuple[Event, Subscription]]:
     rows = await session.execute(
-        select(Calendar, Subscription).join(Subscription).join(User).where(
-            User.telegram_id == telegram_id, Subscription.active.is_(True))
+        select(Event, Subscription)
+        .join(Subscription, Subscription.event_id == Event.id)
+        .join(User, User.id == Subscription.user_id)
+        .where(User.telegram_id == telegram_id, Subscription.active.is_(True))
     )
     return list(rows.tuples().all())
 
 
-async def subscribed_calendars_with_series(session, telegram_id: int, range_mode: str,
-                                           tz_offset_hours: int | str) -> list[Calendar]:
-    calendars = []
-    for calendar, _ in await fetch_subscribed_calendars(session, telegram_id):
-        series = await calendar_event_series(session, calendar.id, range_mode, tz_offset_hours)
-        if series:
-            calendars.append(calendar)
-    return calendars
-
-
-async def subscribed_calendars_with_pending(session, telegram_id: int, default_tz: int | str) -> list[Calendar]:
-    rows = await upcoming_for_user_with_status(session, telegram_id, "future", default_tz)
-    pending_cal_ids = {c.id for occ, c, confirmed in rows if not confirmed}
-    return [c for c, _ in await fetch_subscribed_calendars(session, telegram_id) if c.id in pending_cal_ids]
-
-
-async def pending_series_for_calendar(session, telegram_id: int, calendar_id: int,
-                                      default_tz: int | str) -> list[Event]:
+async def pending_events_for_user(session, telegram_id: int, default_tz: int | str) -> list[Event]:
     rows = await upcoming_for_user_with_status(session, telegram_id, "future", default_tz)
     seen: dict[int, Event] = {}
-    for occ, calendar, confirmed in rows:
-        if confirmed or calendar.id != calendar_id:
+    for occ, _calendar, confirmed in rows:
+        if confirmed or occ.event_id in seen:
             continue
-        if occ.event_id not in seen:
-            seen[occ.event_id] = occ.event
+        seen[occ.event_id] = occ.event
     return list(seen.values())
+
+
+async def pending_occurrences_for_event(session, telegram_id: int, event_id: int,
+                                        default_tz: int | str) -> list[EventOccurrence]:
+    user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+    rows = await upcoming_for_user_with_status(session, telegram_id, "future", default_tz)
+    confirmed = await confirmed_occurrence_ids(session, user.id, [occ.id for occ, _, _ in rows]) if user else set()
+    return [occ for occ, _, _ in rows if occ.event_id == event_id and occ.id not in confirmed]
+
+
+def invite_url(settings: Settings, token: str) -> str:
+    return f"https://t.me/{settings.participant_bot_username}?start={token}"
 
 
 def occurrence_button_items(occurrences: list[EventOccurrence], timezone_offset: int | str,
@@ -172,7 +168,13 @@ async def mirror_changed_events(db: Database, settings: Settings, occurrences: l
         await mirror_changed_event(db, settings, occurrence, cancelled=cancelled)
 
 
-async def send_organizer_onboarding(message: Message, locale: str, *, with_language_picker: bool = False) -> None:
+async def send_organizer_onboarding(
+    message: Message, locale: str, db: Database, settings: Settings, *, with_language_picker: bool = False,
+) -> None:
+    async with db.sessions() as session:
+        await ensure_default_calendar(
+            session, message.from_user.id, settings.default_timezone, t(locale, "default_calendar_name"),
+        )
     await message.answer(t(locale, "org.welcome"), reply_markup=organizer_main_menu(locale))
     await message.answer(t(locale, "org.onboarding"))
     if with_language_picker:
@@ -264,7 +266,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
     @router.message(CommandStart())
     async def start_handler(message: Message) -> None:
         locale = await locale_for(message.from_user.id)
-        await send_organizer_onboarding(message, locale, with_language_picker=True)
+        await send_organizer_onboarding(message, locale, db, settings, with_language_picker=True)
 
     @router.message(Command("language"))
     @router.message(F.text.in_(org_texts("language")))
@@ -279,7 +281,7 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         async with db.sessions() as session:
             await set_locale(session, callback.from_user.id, code, settings.default_timezone)
         await callback.message.edit_text(t(code, "language_updated"))
-        await send_organizer_onboarding(callback.message, code)
+        await send_organizer_onboarding(callback.message, code, db, settings)
         await callback.answer()
 
     @router.message(Command("help"))
@@ -559,6 +561,17 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             )
         elif current == OrganizerInvite.calendar.state:
             await cancel()
+        elif current == OrganizerInvite.series.state:
+            calendar_id = data.get("calendar_id")
+            await state.set_state(OrganizerInvite.calendar)
+            await state.update_data(calendar_id=None)
+            async with db.sessions() as session:
+                rows = await fetch_owned_calendars(session, uid)
+            await prompt_inline(
+                target, t(locale, "choose_calendar_invite"),
+                calendars_keyboard(rows, "o_invite", locale, show_back=False),
+                locale, with_reply_nav=isinstance(target, Message),
+            )
         elif current == OrganizerEvents.range_pick.state:
             await cancel()
         elif current == OrganizerEvents.calendar.state:
@@ -1194,6 +1207,20 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         locale = await locale_for(callback.from_user.id)
         await discard_flow(callback, state, locale, role="org")
 
+    async def send_invite_message(
+        target: Message | CallbackQuery, locale: str, title: str, token: str, *, clear_state: bool = True,
+    ) -> None:
+        url = invite_url(settings, token)
+        text = t(locale, "share_event_invite", title=title, url=url)
+        markup = invite_link_keyboard(url, locale)
+        if isinstance(target, CallbackQuery):
+            await target.message.edit_text(text, reply_markup=markup)
+            if clear_state:
+                await restore_menu(target, locale)
+            await target.answer()
+        else:
+            await target.answer(text, reply_markup=markup)
+
     @router.message(Command("invite"))
     @router.message(F.text.in_(org_texts("invite")))
     async def invite_start(message: Message, state: FSMContext, command: CommandObject | None = None) -> None:
@@ -1201,10 +1228,14 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         if command and command.args:
             await state.clear()
             try:
+                event_id = int(command.args.strip())
                 async with db.sessions() as session:
-                    invitation = await make_invitation(session, message.from_user.id, int(command.args.strip()))
-                url = f"https://t.me/{settings.participant_bot_username}?start={invitation.token}"
-                await message.answer(t(locale, "share_invite", url=url), reply_markup=organizer_main_menu(locale))
+                    event = await session.get(Event, event_id)
+                    invitation = await make_invitation(session, message.from_user.id, event_id)
+                if not event:
+                    raise PermissionError("Event not found or not owned by you")
+                await send_invite_message(message, locale, event.title, invitation.token, clear_state=False)
+                await message.answer(t(locale, "main_menu"), reply_markup=organizer_main_menu(locale))
             except (ValueError, PermissionError) as exc:
                 await err(message, locale, exc)
             return
@@ -1213,25 +1244,48 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         await pick_calendar(message, "o_invite", "choose_calendar_invite", locale)
 
     @router.callback_query(F.data.startswith("o_invite:"))
-    async def invite_pick(callback: CallbackQuery, state: FSMContext) -> None:
+    async def invite_pick_calendar(callback: CallbackQuery, state: FSMContext) -> None:
         calendar_id = int(callback.data.split(":", 1)[1])
+        locale = await locale_for(callback.from_user.id)
+        async with db.sessions() as session:
+            series = await fetch_future_series(session, calendar_id)
+        if not series:
+            await state.clear()
+            await callback.message.edit_text(t(locale, "no_future_events"))
+            await restore_menu(callback, locale)
+            await callback.answer()
+            return
+        await state.update_data(calendar_id=calendar_id)
+        await state.set_state(OrganizerInvite.series)
+        await callback.message.edit_text(
+            t(locale, "choose_event_invite"),
+            reply_markup=event_series_keyboard(series, "o_invite_evt", locale),
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("o_invite_evt:"))
+    async def invite_pick_event(callback: CallbackQuery, state: FSMContext) -> None:
+        event_id = int(callback.data.split(":", 1)[1])
         locale = await locale_for(callback.from_user.id)
         try:
             async with db.sessions() as session:
-                invitation = await make_invitation(session, callback.from_user.id, calendar_id)
-            url = f"https://t.me/{settings.participant_bot_username}?start={invitation.token}"
+                event = await session.get(Event, event_id)
+                invitation = await make_invitation(session, callback.from_user.id, event_id)
+            if not event:
+                raise PermissionError("Event not found or not owned by you")
             await state.clear()
-            await callback.message.edit_text(t(locale, "share_invite", url=url))
-            await restore_menu(callback, locale)
+            await send_invite_message(callback, locale, event.title, invitation.token)
         except (ValueError, PermissionError) as exc:
+            calendar_id = (await state.get_data()).get("calendar_id")
             async with db.sessions() as session:
-                rows = await fetch_owned_calendars(session, callback.from_user.id)
+                series = await fetch_future_series(session, int(calendar_id)) if calendar_id else []
             await callback.message.answer(t(locale, "error", error=exc))
-            await callback.message.answer(
-                t(locale, "choose_calendar_invite"),
-                reply_markup=calendars_keyboard(rows, "o_invite", locale),
-            )
-        await callback.answer()
+            if series:
+                await callback.message.answer(
+                    t(locale, "choose_event_invite"),
+                    reply_markup=event_series_keyboard(series, "o_invite_evt", locale),
+                )
+            await callback.answer()
 
     @router.message(Command("newevent"))
     @router.message(F.text.in_(org_texts("new_event")))
@@ -1246,17 +1300,28 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 async with db.sessions() as session:
                     occurrences = await create_events(
                         session, message.from_user.id, int(calendar_id), title, start, int(duration), weeks)
-                    calendar = await session.get(Calendar, int(calendar_id))
-                    await notify_subscribers(session, participant_bot, calendar, occurrences, "heading_new_event")
+                    invitation = await make_invitation(session, message.from_user.id, occurrences[0].event_id)
                 await mirror_created_events(db, settings, int(calendar_id), occurrences)
+                url = invite_url(settings, invitation.token)
                 await message.answer(
-                    t(locale, "events_created", count=len(occurrences), ids=", ".join(str(o.id) for o in occurrences)),
-                    reply_markup=organizer_main_menu(locale),
+                    t(locale, "events_created_invite", count=len(occurrences), title=title, url=url),
+                    reply_markup=invite_link_keyboard(url, locale),
                 )
+                await message.answer(t(locale, "main_menu"), reply_markup=organizer_main_menu(locale))
             except (ValueError, PermissionError) as exc:
                 await err(message, locale, exc)
             return
         await state.clear()
+        async with db.sessions() as session:
+            await ensure_default_calendar(
+                session, message.from_user.id, settings.default_timezone, t(locale, "default_calendar_name"),
+            )
+            rows = await fetch_owned_calendars(session, message.from_user.id)
+        if len(rows) == 1:
+            await state.update_data(calendar_id=rows[0].id)
+            await state.set_state(OrganizerNewEvent.title)
+            await message.answer(t(locale, "enter_event_title"), reply_markup=flow_nav_keyboard(locale))
+            return
         await state.set_state(OrganizerNewEvent.calendar)
         await pick_calendar(
             message, "o_newevent", "choose_calendar_event", locale,
@@ -1461,20 +1526,19 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 occurrences = await create_events(
                     session, message_or_cb.from_user.id, data["calendar_id"], data["title"],
                     data["start"], int(data["duration"]), rule=rule)
-                calendar = await session.get(Calendar, data["calendar_id"])
-                await notify_subscribers(session, participant_bot, calendar, occurrences, "heading_new_event")
+                invitation = await make_invitation(session, message_or_cb.from_user.id, occurrences[0].event_id)
             await mirror_created_events(db, settings, data["calendar_id"], occurrences)
-            text = t(
-                locale, "events_created", count=len(occurrences),
-                ids=", ".join(str(o.id) for o in occurrences),
-            )
+            url = invite_url(settings, invitation.token)
+            text = t(locale, "events_created_invite", count=len(occurrences), title=data["title"], url=url)
+            invite_markup = invite_link_keyboard(url, locale)
             await state.clear()
             if isinstance(message_or_cb, CallbackQuery):
-                await message_or_cb.message.edit_text(text)
+                await message_or_cb.message.edit_text(text, reply_markup=invite_markup)
                 await restore_menu(message_or_cb, locale)
                 await message_or_cb.answer()
             else:
-                await target_message.answer(text, reply_markup=organizer_main_menu(locale))
+                await target_message.answer(text, reply_markup=invite_markup)
+                await target_message.answer(t(locale, "main_menu"), reply_markup=organizer_main_menu(locale))
         except (ValueError, PermissionError) as exc:
             current = await state.get_state()
             if current == OrganizerNewEvent.count.state:
@@ -1884,8 +1948,11 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
 
 async def notify_subscribers(session, bot: Bot, calendar: Calendar, occurrences: list[EventOccurrence],
                              heading_key: str) -> None:
+    if not occurrences:
+        return
+    event_id = occurrences[0].event_id
     users = list((await session.scalars(select(User).join(Subscription).where(
-        Subscription.calendar_id == calendar.id, Subscription.active.is_(True), Subscription.muted.is_(False)))).all())
+        Subscription.event_id == event_id, Subscription.active.is_(True), Subscription.muted.is_(False)))).all())
     for user in users:
         locale = normalize_locale(user.locale)
         heading = t(locale, heading_key)
@@ -1961,14 +2028,15 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
         locale = await locale_for(message.from_user.id)
         token = command.args or ""
         async with db.sessions() as session:
-            calendar = await invitation_calendar(session, token)
-        if not calendar:
+            event = await invitation_event(session, token)
+            calendar = await session.get(Calendar, event.calendar_id) if event else None
+        if not event or not calendar:
             await message.answer(t(locale, "invite_invalid"))
             return
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-            text=t(locale, "btn_subscribe", name=calendar.name), callback_data=f"subscribe:{token}")]])
+            text=t(locale, "btn_subscribe", name=event.title), callback_data=f"subscribe:{token}")]])
         await message.answer(
-            t(locale, "invited_to", name=calendar.name, timezone=format_timezone_offset(calendar.timezone)),
+            t(locale, "invited_to", name=event.title, timezone=format_timezone_offset(calendar.timezone)),
             reply_markup=keyboard,
         )
 
@@ -1977,9 +2045,9 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
         locale = await locale_for(callback.from_user.id)
         try:
             async with db.sessions() as session:
-                calendar = await subscribe(
+                event = await subscribe(
                     session, callback.from_user.id, callback.data.split(":", 1)[1], settings.default_timezone)
-            await callback.message.edit_text(t(locale, "subscribed", name=calendar.name))
+            await callback.message.edit_text(t(locale, "subscribed", name=event.title))
             await callback.message.answer(t(locale, "main_menu"), reply_markup=participant_main_menu(locale))
         except ValueError as exc:
             await callback.message.edit_text(str(exc))
@@ -2056,70 +2124,38 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
 
         if current == ParticipantTimezone.timezone.state:
             await cancel()
-        elif current == ParticipantReminders.calendar.state:
+        elif current == ParticipantReminders.event.state:
             await cancel()
         elif current == ParticipantReminders.minutes.state:
-            await state.set_state(ParticipantReminders.calendar)
-            await state.update_data(calendar_id=None)
+            await state.set_state(ParticipantReminders.event)
+            await state.update_data(event_id=None)
             async with db.sessions() as session:
-                data = await fetch_subscribed_calendars(session, uid)
-            calendars = [c for c, _ in data]
+                subscribed = await fetch_subscribed_events(session, uid)
+            events = [event for event, _ in subscribed]
             await prompt_inline(
                 target, t(locale, "choose_reminders"),
-                calendars_keyboard(calendars, "p_remind", locale, show_back=False),
+                subscribed_events_keyboard(events, "p_remind", locale, show_back=False),
                 locale, with_reply_nav=isinstance(target, Message),
             )
         elif current == ParticipantUpcoming.range_pick.state:
             await cancel()
-        elif current == ParticipantUpcoming.calendar.state:
-            await state.set_state(ParticipantUpcoming.range_pick)
-            await state.update_data(range_mode=None, calendar_id=None)
-            await prompt_inline(
-                target, t(locale, "what_to_see"),
-                event_range_keyboard("p_up_rng", locale),
-                locale, with_reply_nav=isinstance(target, Message),
-            )
-        elif current == ParticipantUpcoming.series.state:
-            range_mode = data.get("range_mode") or "week"
-            await state.set_state(ParticipantUpcoming.calendar)
-            await state.update_data(calendar_id=None, series_id=None)
-            async with db.sessions() as session:
-                user = await session.scalar(select(User).where(User.telegram_id == uid))
-                tz = user.timezone if user else settings.default_timezone
-                calendars = await subscribed_calendars_with_series(session, uid, range_mode, tz)
-            await prompt_inline(
-                target, t(locale, "choose_calendar"),
-                calendars_keyboard(calendars, f"p_up_cal:{range_mode}", locale, show_back=True),
-                locale, with_reply_nav=isinstance(target, Message),
-            )
-        elif current == ParticipantConfirmPick.calendar.state:
+        elif current == ParticipantConfirmPick.event.state:
             await cancel()
-        elif current == ParticipantConfirmPick.series.state:
-            await state.set_state(ParticipantConfirmPick.calendar)
-            await state.update_data(calendar_id=None, series_id=None)
+        elif current == ParticipantConfirmPick.occurrence.state:
+            await state.set_state(ParticipantConfirmPick.event)
+            await state.update_data(event_id=None)
             async with db.sessions() as session:
-                calendars = await subscribed_calendars_with_pending(session, uid, settings.default_timezone)
+                events = await pending_events_for_user(session, uid, settings.default_timezone)
             await prompt_inline(
                 target, t(locale, "choose_calendar_confirm"),
-                calendars_keyboard(calendars, "p_conf_cal", locale, show_back=False),
+                subscribed_events_keyboard(events, "p_conf_evt", locale, show_back=False),
                 locale, with_reply_nav=isinstance(target, Message),
             )
-        elif current == ParticipantConfirmPick.occurrence.state:
-            calendar_id = data.get("calendar_id")
-            await state.set_state(ParticipantConfirmPick.series)
-            await state.update_data(series_id=None)
-            async with db.sessions() as session:
-                series = await pending_series_for_calendar(session, uid, int(calendar_id), settings.default_timezone)
-            await prompt_inline(
-                target, t(locale, "choose_event"),
-                event_series_keyboard(series, "p_conf_ser", locale),
-                locale, with_reply_nav=isinstance(target, Message),
-            )
-        elif current == ParticipantMute.calendar.state:
+        elif current == ParticipantMute.event.state:
             await cancel()
-        elif current == ParticipantUnmute.calendar.state:
+        elif current == ParticipantUnmute.event.state:
             await cancel()
-        elif current == ParticipantUnsubscribe.calendar.state:
+        elif current == ParticipantUnsubscribe.event.state:
             await cancel()
         else:
             await cancel()
@@ -2164,76 +2200,14 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
     async def upcoming_range_pick(callback: CallbackQuery, state: FSMContext) -> None:
         range_mode = callback.data.split(":", 1)[1]
         locale = await locale_for(callback.from_user.id)
-        await state.update_data(range_mode=range_mode)
-        async with db.sessions() as session:
-            user = await session.scalar(select(User).where(User.telegram_id == callback.from_user.id))
-            tz = user.timezone if user else settings.default_timezone
-            calendars = await subscribed_calendars_with_series(
-                session, callback.from_user.id, range_mode, tz)
-        if not calendars:
-            await state.clear()
-            await callback.message.edit_text(
-                t(locale, "no_events_week" if range_mode == "week" else "no_events_upcoming"))
-            await restore_menu(callback, locale)
-            await callback.answer()
-            return
-        if len(calendars) == 1:
-            calendar = calendars[0]
-            await state.update_data(calendar_id=calendar.id)
-            async with db.sessions() as session:
-                series = await fetch_future_series(session, calendar.id, range_mode, calendar.timezone)
-            await state.set_state(ParticipantUpcoming.series)
-            await callback.message.edit_text(
-                t(locale, "choose_event"),
-                reply_markup=event_series_keyboard(series, f"p_up_ser:{range_mode}", locale, show_back=False),
-            )
-            await callback.answer()
-            return
-        await state.set_state(ParticipantUpcoming.calendar)
-        await callback.message.edit_text(
-            t(locale, "choose_calendar"),
-            reply_markup=calendars_keyboard(calendars, f"p_up_cal:{range_mode}", locale),
-        )
-        await callback.answer()
-
-    @router.callback_query(F.data.startswith("p_up_cal:"))
-    async def upcoming_calendar_pick(callback: CallbackQuery, state: FSMContext) -> None:
-        _, range_mode, calendar_id = callback.data.split(":", 2)
-        locale = await locale_for(callback.from_user.id)
-        async with db.sessions() as session:
-            calendar = await session.get(Calendar, int(calendar_id))
-            series = await fetch_future_series(session, calendar.id, range_mode, calendar.timezone)
-        if not series:
-            await state.clear()
-            await callback.message.edit_text(
-                t(locale, "no_events_week" if range_mode == "week" else "no_events_upcoming"))
-            await restore_menu(callback, locale)
-            await callback.answer()
-            return
-        await state.update_data(range_mode=range_mode, calendar_id=calendar.id)
-        await state.set_state(ParticipantUpcoming.series)
-        await callback.message.edit_text(
-            t(locale, "choose_event"),
-            reply_markup=event_series_keyboard(series, f"p_up_ser:{range_mode}", locale),
-        )
-        await callback.answer()
-
-    @router.callback_query(F.data.startswith("p_up_ser:"))
-    async def upcoming_series_pick(callback: CallbackQuery, state: FSMContext) -> None:
-        _, range_mode, series_id = callback.data.split(":", 2)
-        locale = await locale_for(callback.from_user.id)
-        async with db.sessions() as session:
-            user = await session.scalar(select(User).where(User.telegram_id == callback.from_user.id))
-            event = await session.get(Event, int(series_id))
-            calendar = await session.get(Calendar, event.calendar_id)
-            rows = await event_occurrences(session, event.id, range_mode, calendar.timezone)
-            confirmed = set()
-            if user:
-                confirmed = await confirmed_occurrence_ids(session, user.id, [o.id for o in rows])
         await state.clear()
+        async with db.sessions() as session:
+            user = await session.scalar(select(User).where(User.telegram_id == callback.from_user.id))
+            rows = await upcoming_for_user_with_status(
+                session, callback.from_user.id, range_mode, settings.default_timezone)
+        tz = user.timezone if user else settings.default_timezone
         await callback.message.edit_text(
-            format_series_occurrences(
-                event, rows, calendar, range_mode, locale, with_confirm=True, confirmed_ids=confirmed))
+            format_participant_events(rows, tz, range_mode, locale))
         await restore_menu(callback, locale)
         await callback.answer()
 
@@ -2246,57 +2220,33 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
             await handle_confirm(message.from_user, int(command.args.strip()), message, locale)
             return
         async with db.sessions() as session:
-            calendars = await subscribed_calendars_with_pending(
-                session, message.from_user.id, settings.default_timezone)
-        if not calendars:
+            events = await pending_events_for_user(session, message.from_user.id, settings.default_timezone)
+        if not events:
             await message.answer(t(locale, "no_pending_confirm"), reply_markup=participant_main_menu(locale))
             return
-        await state.set_state(ParticipantConfirmPick.calendar)
+        await state.set_state(ParticipantConfirmPick.event)
         await prompt_inline(
             message, t(locale, "choose_calendar_confirm"),
-            calendars_keyboard(calendars, "p_conf_cal", locale, show_back=False),
+            subscribed_events_keyboard(events, "p_conf_evt", locale, show_back=False),
             locale, with_reply_nav=True,
         )
 
-    @router.callback_query(F.data.startswith("p_conf_cal:"))
-    async def confirm_calendar(callback: CallbackQuery, state: FSMContext) -> None:
-        calendar_id = int(callback.data.split(":", 1)[1])
+    @router.callback_query(F.data.startswith("p_conf_evt:"))
+    async def confirm_event_pick(callback: CallbackQuery, state: FSMContext) -> None:
+        event_id = int(callback.data.split(":", 1)[1])
         locale = await locale_for(callback.from_user.id)
         async with db.sessions() as session:
-            series = await pending_series_for_calendar(
-                session, callback.from_user.id, calendar_id, settings.default_timezone)
-        if not series:
+            event = await session.get(Event, event_id)
+            calendar = await session.get(Calendar, event.calendar_id) if event else None
+            pending = await pending_occurrences_for_event(
+                session, callback.from_user.id, event_id, settings.default_timezone)
+        if not pending or not calendar:
             await state.clear()
             await callback.message.edit_text(t(locale, "no_pending_confirm"))
             await restore_menu(callback, locale)
             await callback.answer()
             return
-        await state.update_data(calendar_id=calendar_id)
-        await state.set_state(ParticipantConfirmPick.series)
-        await callback.message.edit_text(
-            t(locale, "choose_event"),
-            reply_markup=event_series_keyboard(series, "p_conf_ser", locale),
-        )
-        await callback.answer()
-
-    @router.callback_query(F.data.startswith("p_conf_ser:"))
-    async def confirm_series(callback: CallbackQuery, state: FSMContext) -> None:
-        series_id = int(callback.data.split(":", 1)[1])
-        locale = await locale_for(callback.from_user.id)
-        data = await state.get_data()
-        async with db.sessions() as session:
-            calendar = await session.get(Calendar, int(data["calendar_id"]))
-            user = await session.scalar(select(User).where(User.telegram_id == callback.from_user.id))
-            rows = await event_occurrences(session, series_id)
-            confirmed = await confirmed_occurrence_ids(session, user.id, [o.id for o in rows]) if user else set()
-            pending = [o for o in rows if o.id not in confirmed]
-        if not pending:
-            await state.clear()
-            await callback.message.edit_text(t(locale, "no_pending_confirm"))
-            await restore_menu(callback, locale)
-            await callback.answer()
-            return
-        await state.update_data(series_id=series_id)
+        await state.update_data(event_id=event_id)
         await state.set_state(ParticipantConfirmPick.occurrence)
         await callback.message.edit_text(
             t(locale, "choose_occurrence_confirm"),
@@ -2351,14 +2301,13 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
         if ok:
             await state.clear()
             return
-        if in_flow and data.get("series_id") and data.get("calendar_id"):
+        if in_flow and data.get("event_id"):
             async with db.sessions() as session:
-                calendar = await session.get(Calendar, int(data["calendar_id"]))
-                user = await session.scalar(select(User).where(User.telegram_id == callback.from_user.id))
-                rows = await event_occurrences(session, int(data["series_id"]))
-                confirmed = await confirmed_occurrence_ids(session, user.id, [o.id for o in rows]) if user else set()
-                pending = [o for o in rows if o.id not in confirmed]
-            if pending:
+                event = await session.get(Event, int(data["event_id"]))
+                calendar = await session.get(Calendar, event.calendar_id) if event else None
+                pending = await pending_occurrences_for_event(
+                    session, callback.from_user.id, int(data["event_id"]), settings.default_timezone)
+            if pending and calendar:
                 await callback.message.answer(
                     t(locale, "choose_occurrence_confirm"),
                     reply_markup=occurrences_keyboard(
@@ -2373,11 +2322,11 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
 
     async def reply_subscriptions(message: Message, locale: str) -> None:
         async with db.sessions() as session:
-            data = await fetch_subscribed_calendars(session, message.from_user.id)
+            data = await fetch_subscribed_events(session, message.from_user.id)
         await message.answer(
             "\n".join(
-                f"{c.id}: {c.name} [{t(locale, 'sub_muted') if s.muted else t(locale, 'sub_active')}]"
-                for c, s in data
+                f"{event.id}: {event.title} [{t(locale, 'sub_muted') if sub.muted else t(locale, 'sub_active')}]"
+                for event, sub in data
             ) or t(locale, "no_subscriptions"),
             reply_markup=participant_main_menu(locale),
         )
@@ -2418,22 +2367,22 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
 
     async def pick_subscription(message: Message, prefix: str, prompt_key: str, locale: str) -> bool:
         async with db.sessions() as session:
-            data = await fetch_subscribed_calendars(session, message.from_user.id)
+            data = await fetch_subscribed_events(session, message.from_user.id)
         if not data:
             await message.answer(t(locale, "no_subscriptions"), reply_markup=participant_main_menu(locale))
             return False
-        calendars = [c for c, _ in data]
+        events = [event for event, _ in data]
         await prompt_inline(
             message, t(locale, prompt_key),
-            calendars_keyboard(calendars, prefix, locale, show_back=False),
+            subscribed_events_keyboard(events, prefix, locale, show_back=False),
             locale, with_reply_nav=True,
         )
         return True
 
-    async def state_action(message: Message, calendar_id: int, action: str, locale: str) -> None:
+    async def state_action(message: Message, event_id: int, action: str, locale: str) -> None:
         try:
             async with db.sessions() as session:
-                changed = await set_subscription_state(session, message.from_user.id, calendar_id, action)
+                changed = await set_subscription_state(session, message.from_user.id, event_id, action)
             text = t(locale, "updated") if changed else t(locale, "subscription_not_found")
             await message.answer(text, reply_markup=participant_main_menu(locale))
         except ValueError:
@@ -2447,7 +2396,7 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
         if command and command.args:
             await state_action(message, int(command.args.strip()), "mute", locale)
             return
-        await state.set_state(ParticipantMute.calendar)
+        await state.set_state(ParticipantMute.event)
         await pick_subscription(message, "p_mute", "choose_mute", locale)
 
     @router.message(Command("unmute"))
@@ -2458,7 +2407,7 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
         if command and command.args:
             await state_action(message, int(command.args.strip()), "unmute", locale)
             return
-        await state.set_state(ParticipantUnmute.calendar)
+        await state.set_state(ParticipantUnmute.event)
         await pick_subscription(message, "p_unmute", "choose_unmute", locale)
 
     @router.message(Command("unsubscribe"))
@@ -2469,15 +2418,15 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
         if command and command.args:
             await state_action(message, int(command.args.strip()), "unsubscribe", locale)
             return
-        await state.set_state(ParticipantUnsubscribe.calendar)
+        await state.set_state(ParticipantUnsubscribe.event)
         await pick_subscription(message, "p_unsub", "choose_unsubscribe", locale)
 
     @router.callback_query(F.data.startswith("p_mute:"))
     async def mute_pick(callback: CallbackQuery, state: FSMContext) -> None:
-        calendar_id = int(callback.data.split(":", 1)[1])
+        event_id = int(callback.data.split(":", 1)[1])
         locale = await locale_for(callback.from_user.id)
         async with db.sessions() as session:
-            changed = await set_subscription_state(session, callback.from_user.id, calendar_id, "mute")
+            changed = await set_subscription_state(session, callback.from_user.id, event_id, "mute")
         await state.clear()
         await callback.message.edit_text(t(locale, "muted") if changed else t(locale, "subscription_not_found"))
         await restore_menu(callback, locale)
@@ -2485,10 +2434,10 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
 
     @router.callback_query(F.data.startswith("p_unmute:"))
     async def unmute_pick(callback: CallbackQuery, state: FSMContext) -> None:
-        calendar_id = int(callback.data.split(":", 1)[1])
+        event_id = int(callback.data.split(":", 1)[1])
         locale = await locale_for(callback.from_user.id)
         async with db.sessions() as session:
-            changed = await set_subscription_state(session, callback.from_user.id, calendar_id, "unmute")
+            changed = await set_subscription_state(session, callback.from_user.id, event_id, "unmute")
         await state.clear()
         await callback.message.edit_text(t(locale, "unmuted") if changed else t(locale, "subscription_not_found"))
         await restore_menu(callback, locale)
@@ -2496,10 +2445,10 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
 
     @router.callback_query(F.data.startswith("p_unsub:"))
     async def unsub_pick(callback: CallbackQuery, state: FSMContext) -> None:
-        calendar_id = int(callback.data.split(":", 1)[1])
+        event_id = int(callback.data.split(":", 1)[1])
         locale = await locale_for(callback.from_user.id)
         async with db.sessions() as session:
-            changed = await set_subscription_state(session, callback.from_user.id, calendar_id, "unsubscribe")
+            changed = await set_subscription_state(session, callback.from_user.id, event_id, "unsubscribe")
         await state.clear()
         await callback.message.edit_text(
             t(locale, "unsubscribed") if changed else t(locale, "subscription_not_found"))
@@ -2525,14 +2474,14 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
                 await message.answer(t(locale, "error", error=detail), reply_markup=participant_main_menu(locale))
             return
         await state.clear()
-        await state.set_state(ParticipantReminders.calendar)
+        await state.set_state(ParticipantReminders.event)
         await pick_subscription(message, "p_remind", "choose_reminders", locale)
 
     @router.callback_query(F.data.startswith("p_remind:"))
-    async def reminders_calendar(callback: CallbackQuery, state: FSMContext) -> None:
-        calendar_id = int(callback.data.split(":", 1)[1])
+    async def reminders_event(callback: CallbackQuery, state: FSMContext) -> None:
+        event_id = int(callback.data.split(":", 1)[1])
         locale = await locale_for(callback.from_user.id)
-        await state.update_data(calendar_id=calendar_id)
+        await state.update_data(event_id=event_id)
         await state.set_state(ParticipantReminders.minutes)
         await callback.message.edit_text(t(locale, "enter_reminders"))
         await callback.message.answer("\u2060", reply_markup=flow_nav_keyboard(locale))
@@ -2544,7 +2493,7 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
         locale = await locale_for(message.from_user.id)
         try:
             async with db.sessions() as session:
-                changed = await set_reminders(session, message.from_user.id, data["calendar_id"], message.text.strip())
+                changed = await set_reminders(session, message.from_user.id, data["event_id"], message.text.strip())
             await state.clear()
             await message.answer(
                 t(locale, "reminders_saved") if changed else t(locale, "subscription_not_found"),

@@ -99,17 +99,17 @@ class EventOccurrence(Base):
 class Invitation(Base):
     __tablename__ = "invitations"
     token: Mapped[str] = mapped_column(String(64), primary_key=True)
-    calendar_id: Mapped[int] = mapped_column(ForeignKey("calendars.id"), index=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Subscription(Base):
     __tablename__ = "subscriptions"
-    __table_args__ = (UniqueConstraint("user_id", "calendar_id"),)
+    __table_args__ = (UniqueConstraint("user_id", "event_id"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    calendar_id: Mapped[int] = mapped_column(ForeignKey("calendars.id"), index=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     muted: Mapped[bool] = mapped_column(Boolean, default=False)
     # Participant-only pre-event notifications; None → DEFAULT_NOTIFICATION_MINUTES

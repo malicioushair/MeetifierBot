@@ -618,18 +618,13 @@ async def adopt_google_calendar(db: Database, settings: Settings, telegram_id: i
         if not ctx:
             raise ValueError("Calendar is not linked to Google")
         account, link = ctx
-        invitation = await session.scalar(select(Invitation).where(
-            Invitation.calendar_id == calendar_id,
-            (Invitation.expires_at.is_(None)) | (Invitation.expires_at > utcnow()),
-        ).order_by(Invitation.created_at.desc()))
-        if not invitation:
-            import secrets
-            invitation = Invitation(token=secrets.token_urlsafe(24), calendar_id=calendar_id)
-            session.add(invitation)
-            await session.commit()
-        invitation_url = f"https://t.me/{participant_bot_username}?start={invitation.token}"
         rows = (await session.execute(
-            select(GoogleEventLink.google_event_id, GoogleEventState.recurring_event_id, EventOccurrence.id)
+            select(
+                GoogleEventLink.google_event_id,
+                GoogleEventState.recurring_event_id,
+                EventOccurrence.id,
+                Event.id,
+            )
             .join(EventOccurrence, EventOccurrence.id == GoogleEventLink.occurrence_id)
             .join(Event, Event.id == EventOccurrence.event_id)
             .outerjoin(GoogleEventState, GoogleEventState.occurrence_id == EventOccurrence.id)
@@ -642,21 +637,37 @@ async def adopt_google_calendar(db: Database, settings: Settings, telegram_id: i
                     GoogleEventAttendee.occurrence_id == EventOccurrence.id).exists(),
             )
         )).all()
-        targets = {recurring_id or google_event_id for google_event_id, recurring_id, _ in rows}
+        targets: dict[str, int] = {}
+        for google_event_id, recurring_id, _, meetifier_event_id in rows:
+            targets[recurring_id or google_event_id] = meetifier_event_id
         loop = asyncio.get_running_loop()
         updated = 0
         latest_creds = None
-        for google_event_id in targets:
+        sample_url = ""
+        for google_event_id, meetifier_event_id in targets.items():
+            invitation = await session.scalar(select(Invitation).where(
+                Invitation.event_id == meetifier_event_id,
+                (Invitation.expires_at.is_(None)) | (Invitation.expires_at > utcnow()),
+            ).order_by(Invitation.created_at.desc()))
+            if not invitation:
+                import secrets
+                invitation = Invitation(token=secrets.token_urlsafe(24), event_id=meetifier_event_id)
+                session.add(invitation)
+                await session.flush()
+            invitation_url = f"https://t.me/{participant_bot_username}?start={invitation.token}"
+            if not sample_url:
+                sample_url = invitation_url
             changed, creds = await loop.run_in_executor(
                 None,
-                lambda event_id=google_event_id: _patch_adoption_link_sync(
-                    settings, account, link.google_calendar_id, event_id, invitation_url),
+                lambda gid=google_event_id, url=invitation_url: _patch_adoption_link_sync(
+                    settings, account, link.google_calendar_id, gid, url),
             )
             updated += int(changed)
             latest_creds = creds
         if latest_creds:
             await _persist_refreshed_tokens(session, settings, account, latest_creds)
-        return updated, len(targets), invitation_url
+        await session.commit()
+        return updated, len(targets), sample_url
 
 
 async def complete_oauth(settings: Settings, code: str) -> tuple[str, str | None, datetime | None, str]:
