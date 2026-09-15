@@ -9,6 +9,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from .bots import build_organizer_router, build_participant_router, configure_commands
 from .config import Settings
 from .db import Database
+from .google_sync import google_enabled
 from .oauth_server import run_oauth_server
 from .worker import run_google_sync_worker, run_worker
 
@@ -27,9 +28,9 @@ async def main() -> None:
         organizer_dp.start_polling(organizer, polling_timeout=settings.poll_timeout_seconds),
         participant_dp.start_polling(participant, polling_timeout=settings.poll_timeout_seconds),
         run_worker(db, participant, settings.worker_interval_seconds),
+        run_oauth_server(settings, db, organizer),
     ]
-    if settings.google_client_id:
-        tasks.append(run_oauth_server(settings, db, organizer))
+    if google_enabled(settings):
         tasks.append(run_google_sync_worker(db, settings, participant))
     try:
         await asyncio.gather(*tasks)

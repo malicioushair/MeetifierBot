@@ -3,7 +3,7 @@ from __future__ import annotations
 import calendar as cal_mod
 from datetime import date
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+from aiogram.types import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
 from .db import Calendar, Event
 from .i18n import LOCALES, LOCALE_LABELS, NAV_BTN, ORG_BTN, PAR_BTN, all_btn_texts, btn, t
@@ -99,10 +99,16 @@ def locale_keyboard(prefix: str = "set_locale") -> InlineKeyboardMarkup:
 
 def event_range_keyboard(prefix: str, locale: str | None = None, *, with_nav: bool = True) -> InlineKeyboardMarkup:
     markup = InlineKeyboardMarkup(
-        inline_keyboard=[[
-            InlineKeyboardButton(text=t(locale, "btn_next_event"), callback_data=f"{prefix}:next"),
-            InlineKeyboardButton(text=t(locale, "btn_this_week"), callback_data=f"{prefix}:week"),
-        ]]
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=t(locale, "btn_next_event"), callback_data=f"{prefix}:next"),
+                InlineKeyboardButton(text=t(locale, "btn_this_week"), callback_data=f"{prefix}:week"),
+            ],
+            [
+                InlineKeyboardButton(text=t(locale, "btn_next_week"), callback_data=f"{prefix}:next_week"),
+                InlineKeyboardButton(text=t(locale, "btn_this_month"), callback_data=f"{prefix}:month"),
+            ],
+        ]
     )
     return attach_flow_nav(markup, locale, show_back=False) if with_nav else markup
 
@@ -171,6 +177,75 @@ def event_series_keyboard(
         ]
     )
     return attach_flow_nav(markup, locale, show_back=show_back) if with_nav else markup
+
+
+def owned_events_keyboard(
+    items: list[tuple[Event, Calendar]],
+    prefix: str,
+    locale: str | None = None,
+    *,
+    with_nav: bool = True,
+    show_back: bool = True,
+) -> InlineKeyboardMarkup:
+    multi_calendar = len({calendar.id for _, calendar in items}) > 1
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(
+                text=f"{event.title} ({calendar.name})" if multi_calendar else event.title,
+                callback_data=f"{prefix}:{event.id}",
+            )]
+            for event, calendar in items
+        ]
+    )
+    return attach_flow_nav(markup, locale, show_back=show_back) if with_nav else markup
+
+
+def subscribed_events_keyboard(
+    events: list[Event],
+    prefix: str,
+    locale: str | None = None,
+    *,
+    with_nav: bool = True,
+    show_back: bool = True,
+) -> InlineKeyboardMarkup:
+    return event_series_keyboard(events, prefix, locale, with_nav=with_nav, show_back=show_back)
+
+
+def invite_link_keyboard(url: str, locale: str | None = None) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text=t(locale, "btn_copy_invite_link"),
+            copy_text=CopyTextButton(text=url),
+        ),
+    ]])
+
+
+def google_onboarding_keyboard(url: str, locale: str | None = None) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text=t(locale, "btn_skip_google"),
+            callback_data="o_onboard_skip",
+        ),
+    ]])
+
+
+def read_onboarding_keyboard(locale: str | None = None) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(locale, "btn_take_onboarding"), callback_data="o_tour_take")],
+        [InlineKeyboardButton(text=t(locale, "btn_skip_onboarding"), callback_data="o_tour_skip")],
+    ])
+
+
+def post_google_link_keyboard(locale: str | None = None) -> InlineKeyboardMarkup:
+    b = lambda action: btn(ORG_BTN, action, locale)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=b("google_import"), callback_data="o_onboard_import"),
+            InlineKeyboardButton(text=b("new_calendar"), callback_data="o_onboard_calendar"),
+        ],
+        [InlineKeyboardButton(text=b("new_event"), callback_data="o_onboard_newevent")],
+        [InlineKeyboardButton(text=t(locale, "btn_skip_google"), callback_data="o_onboard_post_skip")],
+    ])
 
 
 def occurrences_keyboard(

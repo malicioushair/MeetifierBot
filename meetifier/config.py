@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
@@ -28,6 +30,8 @@ class Settings:
     google_redirect_uri: str = ""
     oauth_host: str = "127.0.0.1"
     oauth_port: int = 8080
+    oauth_state_ttl_seconds: int = 900
+    google_token_encryption_key: str = ""
     google_sync_interval_seconds: int = 60
 
     @classmethod
@@ -46,6 +50,8 @@ class Settings:
             google_redirect_uri=os.getenv("GOOGLE_REDIRECT_URI", ""),
             oauth_host=os.getenv("OAUTH_HOST", "127.0.0.1"),
             oauth_port=int(os.getenv("OAUTH_PORT", "8080")),
+            oauth_state_ttl_seconds=int(os.getenv("OAUTH_STATE_TTL_SECONDS", "900")),
+            google_token_encryption_key=os.getenv("GOOGLE_TOKEN_ENCRYPTION_KEY", ""),
             google_sync_interval_seconds=int(os.getenv("GOOGLE_SYNC_INTERVAL_SECONDS", "60")),
         )
         missing = [name for name, value in (
@@ -55,7 +61,56 @@ class Settings:
         ) if not value]
         if missing:
             raise ValueError("Missing settings: " + ", ".join(missing))
+        validate_google_configuration(settings)
         return settings
+
+
+def validate_google_configuration(settings: Settings) -> None:
+    google_values = {
+        "GOOGLE_CLIENT_ID": settings.google_client_id,
+        "GOOGLE_CLIENT_SECRET": settings.google_client_secret,
+        "GOOGLE_REDIRECT_URI": settings.google_redirect_uri,
+    }
+    configured = [name for name, value in google_values.items() if value]
+    if configured and len(configured) != len(google_values):
+        missing = [name for name, value in google_values.items() if not value]
+        raise ValueError("Incomplete Google Calendar settings; missing: " + ", ".join(missing))
+    if not configured:
+        return
+    if settings.oauth_state_ttl_seconds <= 0:
+        raise ValueError("OAUTH_STATE_TTL_SECONDS must be greater than zero")
+
+    redirect = urlparse(settings.google_redirect_uri)
+    if not redirect.hostname or redirect.path != "/oauth/google/callback":
+        raise ValueError(
+            "GOOGLE_REDIRECT_URI must end with /oauth/google/callback and include a hostname"
+        )
+    if redirect.username or redirect.password or redirect.query or redirect.fragment:
+        raise ValueError("GOOGLE_REDIRECT_URI cannot contain user info, a query, or a fragment")
+
+    localhost = redirect.hostname in {"localhost", "127.0.0.1", "::1"}
+    if localhost:
+        if redirect.scheme not in {"http", "https"}:
+            raise ValueError("Local GOOGLE_REDIRECT_URI must use http or https")
+    else:
+        if redirect.scheme != "https":
+            raise ValueError("Public GOOGLE_REDIRECT_URI must use https")
+        try:
+            ipaddress.ip_address(redirect.hostname)
+        except ValueError:
+            pass
+        else:
+            raise ValueError("Public GOOGLE_REDIRECT_URI must use a domain name, not an IP address")
+        if not settings.google_token_encryption_key:
+            raise ValueError("GOOGLE_TOKEN_ENCRYPTION_KEY is required for a public Google OAuth deployment")
+
+    if settings.google_token_encryption_key:
+        from cryptography.fernet import Fernet
+
+        try:
+            Fernet(settings.google_token_encryption_key.encode("ascii"))
+        except (ValueError, UnicodeEncodeError) as exc:
+            raise ValueError("GOOGLE_TOKEN_ENCRYPTION_KEY must be a valid Fernet key") from exc
 
 
 def validate_timezone(value: int | str) -> int:

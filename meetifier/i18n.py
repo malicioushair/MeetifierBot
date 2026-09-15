@@ -24,7 +24,7 @@ ORG_BTN = {
     "confirm_timing": {"en": "⏱ Attendance ask", "ru": "⏱ Запрос участия", "sr": "⏱ Zahtev prisustva"},
     "google_link": {"en": "🔗 Link Google", "ru": "🔗 Связать Google", "sr": "🔗 Poveži Google"},
     "google_map": {"en": "📎 Map to Google", "ru": "📎 Привязать к Google", "sr": "📎 Mapiraj na Google"},
-    "google_import": {"en": "⬇️ Import Google", "ru": "⬇️ Импорт Google", "sr": "⬇️ Uvoz Google"},
+    "google_import": {"en": "⬇️ Import from Google", "ru": "⬇️ Импорт из Google", "sr": "⬇️ Uvoz iz Google-a"},
     "google_sync": {"en": "🔄 Sync Google", "ru": "🔄 Синхронизация Google", "sr": "🔄 Sinhronizuj Google"},
     "google_adopt": {"en": "📣 Invite Google guests", "ru": "📣 Пригласить гостей Google", "sr": "📣 Pozovi Google goste"},
     "language": {"en": "🌐 Language", "ru": "🌐 Язык", "sr": "🌐 Jezik"},
@@ -53,19 +53,41 @@ MESSAGES: dict[str, dict[str, str]] = {
     "en": {
         "org.welcome": "Welcome to Meetifier Organizer!",
         "par.welcome": "Welcome to Meetifier Participant!",
+        "default_calendar_name": "My schedule",
+        "org.welcome_google": (
+            "Welcome to Meetifier Organizer!\n\n"
+            "Connect Google Calendar to import your schedule or sync events.\n\n"
+            "Open this link:\n{url}"
+        ),
+        "org.google_linked_next": "What next? Import a Google calendar, create an empty calendar, or add an event.",
+        "btn_copy_google_link": "📋 Copy Google link",
+        "btn_skip_google": "Skip for now",
+        "org.read_onboarding_prompt": (
+            "If you'd like a quick introduction to the bot, tap a button below:"
+        ),
+        "btn_take_onboarding": "Take onboarding",
+        "btn_skip_onboarding": "Skip",
+        "org.onboarding_short": (
+            "Basic scenario:\n"
+            "1. Create an event (or import from Google)\n"
+            "2. Share the invite link with participants\n"
+            "3. They subscribe in the Participant Bot\n"
+            "4. Reschedule, cancel, or check confirmations when needed\n\n"
+            "Use the menu buttons below to explore features. Tap ❓ Help for full details and commands."
+        ),
         "org.onboarding": (
             "Typical flow\n"
-            "1. Create a calendar\n"
-            "2. Add events\n"
-            "3. Send an invite link\n"
-            "4. Participants subscribe in the Participant Bot\n"
-            "5. Reschedule or cancel when plans change; check confirmations\n\n"
+            "1. Add an event (or import from Google)\n"
+            "2. Share the invite link for that event\n"
+            "3. Participants subscribe to the event in the Participant Bot\n"
+            "4. Reschedule or cancel when plans change\n"
+            "5. Check confirmations before each session\n\n"
             "Menu features\n"
-            "📅 Calendars — list your calendars\n"
+            "📅 Calendars — list your calendars (power users can add more)\n"
             "➕ New calendar — name + UTC offset + when to ask for attendance (default 24h)\n"
-            "➕ New event — title, start, duration, recurrence (once / weekly / monthly)\n"
-            "📋 Events — next event or this week\n"
-            "🔗 Invite — share a Telegram link so people can subscribe\n"
+            "➕ New event — title, start, duration, recurrence; invite link shown when done\n"
+            "📋 Events — next event, this week, next week, or this month\n"
+            "🔗 Invite — share a link to join a specific event\n"
             "✏️ Reschedule — pick an event and set a new start time\n"
             "❌ Cancel event — cancel and notify subscribers\n"
             "✅ Confirmations — who confirmed attendance\n"
@@ -77,19 +99,19 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "par.onboarding": (
             "Typical flow\n"
-            "1. Open an invite link from an organizer (or tap Subscribe)\n"
+            "1. Open an event invite link from an organizer (or tap Subscribe)\n"
             "2. Set your UTC offset in hours (e.g. 1 for UTC+1)\n"
-            "3. Optionally set personal notification times per calendar (default 1h before)\n"
+            "3. Optionally set personal notification times per event (default 1h before)\n"
             "4. Check upcoming events and confirm attendance when asked\n"
-            "5. Mute or unsubscribe when you no longer need a calendar\n\n"
+            "5. Mute or unsubscribe when you no longer need an event\n\n"
             "Menu features\n"
-            "📅 Upcoming — next event or this week\n"
+            "📅 Upcoming — next event, this week, next week, or this month\n"
             "✅ Confirm — mark that you will attend\n"
-            "📋 Subscriptions — calendars you follow\n"
+            "📋 Subscriptions — events you follow\n"
             "🌍 Timezone — UTC offset in hours used for how times are shown to you\n"
             "⏰ Notifications — your personal heads-up before events (default 60 min; organizer does not see this)\n"
             "🔇 Mute / 🔊 Unmute — pause or resume your personal notifications\n"
-            "🚫 Unsubscribe — leave a calendar and stop jobs\n"
+            "🚫 Unsubscribe — leave an event and stop notifications\n"
             "🌐 Language — switch en / ru / sr\n"
             "❓ Help — command examples\n\n"
             "You must Start this bot before Telegram can deliver messages."
@@ -120,7 +142,14 @@ MESSAGES: dict[str, dict[str, str]] = {
         "usage_confirm_timing": "Usage: /confirm_timing CALENDAR_ID 24",
         "what_to_see": "What would you like to see?",
         "choose_calendar": "Choose a calendar:",
-        "choose_calendar_invite": "Choose a calendar to invite to:",
+        "choose_event_invite": "Choose an event to invite to:",
+        "no_events_to_invite": "No upcoming events to invite to.",
+        "share_event_invite": "Share this link for «{title}»:\n{url}",
+        "btn_copy_invite_link": "📋 Copy invite link",
+        "events_created_invite": (
+            "Created {count} date(s) for «{title}».\n"
+            "Share this link with participants:\n{url}"
+        ),
         "choose_calendar_event": "Choose a calendar for the new event:",
         "choose_calendar_reschedule": "Choose a calendar to reschedule an event in:",
         "choose_calendar_confirmations": "Choose a calendar to view confirmations:",
@@ -135,6 +164,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "event_dates_header": "{title}:",
         "no_future_events": "No future events in this calendar.",
         "no_events_week": "No events for this week.",
+        "no_events_next_week": "No events for next week.",
+        "no_events_month": "No events for this month.",
         "no_events_upcoming": "No upcoming events.",
         "enter_event_title": "Enter event title:",
         "enter_start_time": "Pick a start date (or type YYYY-MM-DD HH:MM):",
@@ -203,7 +234,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "google_choose": "Choose a Google calendar:",
         "google_choose_import": "Choose a filled Google calendar to import:\n{names}",
         "google_map_expired": "Selection expired. Start again with 📎 Map to Google.",
-        "google_import_expired": "Selection expired. Start Import Google again.",
+        "google_import_expired": "Selection expired. Start Import from Google again.",
         "google_mapped": "Mapped to Google calendar: {name}\nImported {created} existing event(s); updated {updated}.",
         "google_imported": (
             "Imported {name} as Meetifier calendar #{id}.\n"
@@ -231,6 +262,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "calendar_not_owned": "Calendar not found or not owned by you.",
         "btn_next_event": "Next event",
         "btn_this_week": "This week",
+        "btn_next_week": "Next week",
+        "btn_this_month": "This month",
         "btn_google_cal": "Google calendar #{n}",
         "btn_notify_attendees": "Notify Google attendees",
         "btn_cancel": "Cancel",
@@ -250,26 +283,30 @@ MESSAGES: dict[str, dict[str, str]] = {
             "✅ {name} confirmed attendance:\n{title}\n{time}\nCalendar: {calendar}"
         ),
         "invite_invalid": "This invitation is invalid or expired.",
-        "invited_to": "You were invited to {name} ({timezone}).",
+        "invited_to": "You were invited to «{name}» ({timezone}).",
+        "par.invite_onboarding": (
+            "Hello! To receive updates on «{event}» with {organizer}, tap the button below:"
+        ),
         "btn_subscribe": "Subscribe to {name}",
-        "subscribed": "Subscribed to {name}. Tap 📅 Upcoming to see events.",
-        "usage_upcoming": "Usage: /upcoming [next|week]",
+        "btn_subscribe_short": "Subscribe",
+        "subscribed": "Subscribed to «{name}». Tap 📅 Upcoming to see your dates.",
+        "usage_upcoming": "Usage: /upcoming [next|week|next_week|month]",
         "no_pending_confirm": "No events waiting for confirmation.",
         "tap_to_confirm": "Tap a date to confirm attendance:",
-        "choose_calendar_confirm": "Choose a calendar to confirm attendance:",
+        "choose_calendar_confirm": "Choose an event to confirm attendance:",
         "confirmed": "Confirmed: {title}\n{time}",
         "already_confirmed": "Already confirmed: {title}",
-        "no_subscriptions": "No subscriptions.",
+        "no_subscriptions": "No event subscriptions yet.",
         "sub_muted": "muted",
         "sub_active": "active",
         "timezone_updated": "Timezone updated (UTC offset).",
-        "choose_mute": "Choose a calendar to mute:",
-        "choose_unmute": "Choose a calendar to unmute:",
-        "choose_unsubscribe": "Choose a calendar to unsubscribe from:",
-        "choose_reminders": "Choose a calendar for your personal notifications:",
+        "choose_mute": "Choose an event to mute:",
+        "choose_unmute": "Choose an event to unmute:",
+        "choose_unsubscribe": "Choose an event to unsubscribe from:",
+        "choose_reminders": "Choose an event for your personal notifications:",
         "updated": "Updated.",
         "subscription_not_found": "Subscription not found.",
-        "usage_action": "Usage: /{action} CALENDAR_ID",
+        "usage_action": "Usage: /{action} EVENT_ID",
         "muted": "Muted.",
         "unmuted": "Unmuted.",
         "unsubscribed": "Unsubscribed.",
@@ -278,14 +315,14 @@ MESSAGES: dict[str, dict[str, str]] = {
             "Enter your personal notification minutes before the event "
             "(comma-separated, default is 60). Example: 60 or 120,30:"
         ),
-        "usage_reminders": "Usage: /reminders CALENDAR_ID 60",
+        "usage_reminders": "Usage: /reminders EVENT_ID 60",
         "org.help": (
             "Use the menu buttons below, or type commands directly:\n\n"
             "/newcalendar Name | 3 [| 24]\n"
             "/calendars\n"
             "/newevent CALENDAR_ID | Title | 2026-09-01 18:30 | DURATION_MINUTES | WEEKS\n            (WEEKS kept for simple weekly; use the menu for Mon+Wed, every 2nd week, first Tuesday, …)\n"
-            "/events CALENDAR_ID [next|week]\n"
-            "/invite CALENDAR_ID\n"
+            "/events CALENDAR_ID [next|week|next_week|month]\n"
+            "/invite EVENT_ID\n"
             "/reschedule EVENT_ID | 2026-09-02 19:00\n"
             "/cancel EVENT_ID\n"
             "/confirmations CALENDAR_ID\n"
@@ -297,13 +334,13 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "par.help": (
             "Use the menu buttons below, or type commands directly:\n\n"
-            "/upcoming [next|week] - upcoming events\n"
+            "/upcoming [next|week|next_week|month] - upcoming events\n"
             "/confirm EVENT_ID - confirm attendance\n"
             "/timezone 3\n"
-            "/reminders CALENDAR_ID 60\n"
-            "/mute CALENDAR_ID\n"
-            "/unmute CALENDAR_ID\n"
-            "/unsubscribe CALENDAR_ID\n"
+            "/reminders EVENT_ID 60\n"
+            "/mute EVENT_ID\n"
+            "/unmute EVENT_ID\n"
+            "/unsubscribe EVENT_ID\n"
             "/subscriptions\n"
             "/language"
         ),
@@ -316,15 +353,37 @@ MESSAGES: dict[str, dict[str, str]] = {
         "cmd.upcoming": "Upcoming events",
         "cmd.confirm": "Confirm attendance",
         "cmd.confirm_timing": "Attendance ask timing",
-        "cmd.subscriptions": "My calendars",
+        "cmd.subscriptions": "My events",
         "cmd.language": "Change language",
     },
     "ru": {
         "org.welcome": "Добро пожаловать в Meetifier Organizer!",
         "par.welcome": "Добро пожаловать в Meetifier Participant!",
+        "default_calendar_name": "Моё расписание",
+        "org.welcome_google": (
+            "Добро пожаловать в Meetifier Organizer!\n\n"
+            "Подключите Google Calendar, чтобы импортировать расписание или синхронизировать события.\n\n"
+            "Откройте ссылку:\n{url}"
+        ),
+        "org.google_linked_next": "Что дальше? Импорт из Google, пустой календарь или новое событие.",
+        "btn_copy_google_link": "📋 Копировать ссылку Google",
+        "btn_skip_google": "Пропустить",
+        "org.read_onboarding_prompt": (
+            "Если хотите кратко познакомиться с ботом, нажмите кнопку ниже:"
+        ),
+        "btn_take_onboarding": "Пройти обучение",
+        "btn_skip_onboarding": "Пропустить",
+        "org.onboarding_short": (
+            "Базовый сценарий:\n"
+            "1. Создайте событие (или импортируйте из Google)\n"
+            "2. Отправьте ссылку-приглашение участникам\n"
+            "3. Они подписываются в Participant Bot\n"
+            "4. Переносите, отменяйте или смотрите подтверждения\n\n"
+            "Используйте кнопки меню ниже. Подробности — в ❓ Помощь."
+        ),
         "org.onboarding": (
             "Обычный сценарий\n"
-            "1. Создайте календарь\n"
+            "1. Добавьте событие (или импортируйте из Google)\n"
             "2. Добавьте события\n"
             "3. Отправьте ссылку-приглашение\n"
             "4. Участники подписываются в Participant Bot\n"
@@ -333,8 +392,8 @@ MESSAGES: dict[str, dict[str, str]] = {
             "📅 Календари — список ваших календарей\n"
             "➕ Новый календарь — название, смещение UTC и когда спрашивать об участии (по умолчанию 24 ч)\n"
             "➕ Новое событие — название, время начала, длительность, недели (1 — разово, 2–52 — еженедельно)\n"
-            "📋 События — следующее или на этой неделе\n"
-            "🔗 Пригласить — ссылка в Telegram для подписки\n"
+            "📋 События — следующее, эта неделя, следующая неделя или этот месяц\n"
+            "🔗 Пригласить — ссылка для присоединения к событию\n"
             "✏️ Перенести — выбрать событие и новое время\n"
             "❌ Отменить событие — отмена и уведомление подписчиков\n"
             "✅ Подтверждения — кто подтвердил участие\n"
@@ -352,7 +411,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "4. Смотрите ближайшие события и подтверждайте участие по запросу\n"
             "5. Отключайте звук или отписывайтесь, когда календарь больше не нужен\n\n"
             "Кнопки меню\n"
-            "📅 Ближайшие — следующее событие или эта неделя\n"
+            "📅 Ближайшие — следующее, эта неделя, следующая неделя или этот месяц\n"
             "✅ Подтвердить — отметить, что вы придёте\n"
             "📋 Подписки — календари, на которые вы подписаны\n"
             "🌍 Часовой пояс — смещение UTC в часах для отображения времени\n"
@@ -389,7 +448,14 @@ MESSAGES: dict[str, dict[str, str]] = {
         "usage_confirm_timing": "Использование: /confirm_timing CALENDAR_ID 24",
         "what_to_see": "Что показать?",
         "choose_calendar": "Выберите календарь:",
-        "choose_calendar_invite": "Выберите календарь для приглашения:",
+        "choose_event_invite": "Выберите событие для приглашения:",
+        "no_events_to_invite": "Нет предстоящих событий для приглашения.",
+        "share_event_invite": "Поделитесь ссылкой на «{title}»:\n{url}",
+        "btn_copy_invite_link": "📋 Копировать ссылку",
+        "events_created_invite": (
+            "Создано дат: {count} для «{title}».\n"
+            "Отправьте ссылку участникам:\n{url}"
+        ),
         "choose_calendar_event": "Выберите календарь для нового события:",
         "choose_calendar_reschedule": "Выберите календарь, чтобы перенести событие:",
         "choose_calendar_confirmations": "Выберите календарь для просмотра подтверждений:",
@@ -404,6 +470,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "event_dates_header": "{title}:",
         "no_future_events": "В этом календаре нет будущих событий.",
         "no_events_week": "На этой неделе событий нет.",
+        "no_events_next_week": "На следующей неделе событий нет.",
+        "no_events_month": "В этом месяце событий нет.",
         "no_events_upcoming": "Нет ближайших событий.",
         "enter_event_title": "Введите название события:",
         "enter_start_time": "Выберите дату начала (или введите ГГГГ-ММ-ДД ЧЧ:ММ):",
@@ -472,7 +540,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "google_choose": "Выберите календарь Google:",
         "google_choose_import": "Выберите заполненный календарь Google для импорта:\n{names}",
         "google_map_expired": "Выбор устарел. Начните снова через 📎 Привязать к Google.",
-        "google_import_expired": "Выбор устарел. Начните импорт Google снова.",
+        "google_import_expired": "Выбор устарел. Начните «Импорт из Google» снова.",
         "google_mapped": "Привязано к Google: {name}\nИмпортировано существующих: {created}; обновлено: {updated}.",
         "google_imported": (
             "Импортирован «{name}» как календарь Meetifier #{id}.\n"
@@ -500,6 +568,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "calendar_not_owned": "Календарь не найден или вам не принадлежит.",
         "btn_next_event": "Следующее",
         "btn_this_week": "Эта неделя",
+        "btn_next_week": "Следующая неделя",
+        "btn_this_month": "Этот месяц",
         "btn_google_cal": "Календарь Google #{n}",
         "btn_notify_attendees": "Уведомить участников Google",
         "btn_cancel": "Отмена",
@@ -520,9 +590,13 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "invite_invalid": "Это приглашение недействительно или истекло.",
         "invited_to": "Вас пригласили в «{name}» ({timezone}).",
+        "par.invite_onboarding": (
+            "Здравствуйте! Чтобы получать уведомления о «{event}» от {organizer}, нажмите кнопку ниже:"
+        ),
         "btn_subscribe": "Подписаться на {name}",
+        "btn_subscribe_short": "Подписаться",
         "subscribed": "Вы подписались на «{name}». Нажмите 📅 Ближайшие, чтобы увидеть события.",
-        "usage_upcoming": "Использование: /upcoming [next|week]",
+        "usage_upcoming": "Использование: /upcoming [next|week|next_week|month]",
         "no_pending_confirm": "Нет событий, ожидающих подтверждения.",
         "tap_to_confirm": "Нажмите на дату, чтобы подтвердить участие:",
         "choose_calendar_confirm": "Выберите календарь для подтверждения участия:",
@@ -553,8 +627,8 @@ MESSAGES: dict[str, dict[str, str]] = {
             "/newcalendar Название | 3 [| 24]\n"
             "/calendars\n"
             "/newevent CALENDAR_ID | Название | 2026-09-01 18:30 | МИНУТЫ | НЕДЕЛИ\n"
-            "/events CALENDAR_ID [next|week]\n"
-            "/invite CALENDAR_ID\n"
+            "/events CALENDAR_ID [next|week|next_week|month]\n"
+            "/invite EVENT_ID\n"
             "/reschedule EVENT_ID | 2026-09-02 19:00\n"
             "/cancel EVENT_ID\n"
             "/confirmations CALENDAR_ID\n"
@@ -566,7 +640,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "par.help": (
             "Используйте кнопки меню ниже или команды:\n\n"
-            "/upcoming [next|week] — ближайшие события\n"
+            "/upcoming [next|week|next_week|month] — ближайшие события\n"
             "/confirm EVENT_ID — подтвердить участие\n"
             "/timezone 3\n"
             "/reminders CALENDAR_ID 60\n"
@@ -591,9 +665,31 @@ MESSAGES: dict[str, dict[str, str]] = {
     "sr": {
         "org.welcome": "Dobrodošli u Meetifier Organizer!",
         "par.welcome": "Dobrodošli u Meetifier Participant!",
+        "default_calendar_name": "Moj raspored",
+        "org.welcome_google": (
+            "Dobrodošli u Meetifier Organizer!\n\n"
+            "Povežite Google Calendar da uvezete raspored ili sinhronizujete događaje.\n\n"
+            "Otvorite link:\n{url}"
+        ),
+        "org.google_linked_next": "Šta dalje? Uvoz iz Google-a, prazan kalendar ili novi događaj.",
+        "btn_copy_google_link": "📋 Kopiraj Google link",
+        "btn_skip_google": "Preskoči",
+        "org.read_onboarding_prompt": (
+            "Ako želite kratak uvod u bota, dodirnite dugme ispod:"
+        ),
+        "btn_take_onboarding": "Prođi uvod",
+        "btn_skip_onboarding": "Preskoči",
+        "org.onboarding_short": (
+            "Osnovni scenario:\n"
+            "1. Kreirajte događaj (ili uvezite iz Google-a)\n"
+            "2. Podelite link pozivnice učesnicima\n"
+            "3. Oni se pretplate u Participant Bot-u\n"
+            "4. Pomerite, otkažite ili proverite potvrde po potrebi\n\n"
+            "Koristite dugmad menija ispod. Detalji su u ❓ Pomoć."
+        ),
         "org.onboarding": (
             "Uobičajeni tok\n"
-            "1. Napravite kalendar\n"
+            "1. Dodajte događaj (ili uvezite iz Google-a)\n"
             "2. Dodajte događaje\n"
             "3. Pošaljite link pozivnice\n"
             "4. Učesnici se pretplate u Participant Bot-u\n"
@@ -602,8 +698,8 @@ MESSAGES: dict[str, dict[str, str]] = {
             "📅 Kalendari — lista vaših kalendara\n"
             "➕ Novi kalendar — naziv, UTC pomeraj i kada tražiti potvrdu prisustva (podrazumevano 24h)\n"
             "➕ Novi događaj — naslov, vreme početka, trajanje, nedelje (1 jednokratno, 2–52 nedeljno)\n"
-            "📋 Događaji — sledeći ili ova nedelja\n"
-            "🔗 Pozovi — Telegram link za pretplatu\n"
+            "📋 Događaji — sledeći, ova nedelja, sledeća nedelja ili ovaj mesec\n"
+            "🔗 Pozovi — link za pridruživanje događaju\n"
             "✏️ Pomeri — izaberite događaj i novo vreme\n"
             "❌ Otkaži događaj — otkazivanje i obaveštavanje pretplatnika\n"
             "✅ Potvrde — ko je potvrdio prisustvo\n"
@@ -621,7 +717,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "4. Pregledajte predstojeće događaje i potvrdite prisustvo kada vas pitaju\n"
             "5. Isključite obaveštenja ili otkažite pretplatu kad kalendar više nije potreban\n\n"
             "Funkcije menija\n"
-            "📅 Predstojeći — sledeći događaj ili ova nedelja\n"
+            "📅 Predstojeći — sledeći, ova nedelja, sledeća nedelja ili ovaj mesec\n"
             "✅ Potvrdi — označite da ćete doći\n"
             "📋 Pretplate — kalendari koje pratite\n"
             "🌍 Vremenska zona — UTC pomeraj u satima za prikaz vremena\n"
@@ -658,7 +754,14 @@ MESSAGES: dict[str, dict[str, str]] = {
         "usage_confirm_timing": "Upotreba: /confirm_timing CALENDAR_ID 24",
         "what_to_see": "Šta želite da vidite?",
         "choose_calendar": "Izaberite kalendar:",
-        "choose_calendar_invite": "Izaberite kalendar za pozivnicu:",
+        "choose_event_invite": "Izaberite događaj za pozivnicu:",
+        "no_events_to_invite": "Nema predstojećih događaja za poziv.",
+        "share_event_invite": "Podelite link za «{title}»:\n{url}",
+        "btn_copy_invite_link": "📋 Kopiraj link pozivnice",
+        "events_created_invite": (
+            "Kreirano {count} datum(a) za «{title}».\n"
+            "Podelite link sa učesnicima:\n{url}"
+        ),
         "choose_calendar_event": "Izaberite kalendar za novi događaj:",
         "choose_calendar_reschedule": "Izaberite kalendar da pomerite događaj:",
         "choose_calendar_confirmations": "Izaberite kalendar za pregled potvrda:",
@@ -673,6 +776,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "event_dates_header": "{title}:",
         "no_future_events": "Nema budućih događaja u ovom kalendaru.",
         "no_events_week": "Nema događaja za ovu nedelju.",
+        "no_events_next_week": "Nema događaja za sledeću nedelju.",
+        "no_events_month": "Nema događaja za ovaj mesec.",
         "no_events_upcoming": "Nema predstojećih događaja.",
         "enter_event_title": "Unesite naslov događaja:",
         "enter_start_time": "Izaberite datum početka (ili unesite GGGG-MM-DD ČČ:MM):",
@@ -741,7 +846,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "google_choose": "Izaberite Google kalendar:",
         "google_choose_import": "Izaberite popunjen Google kalendar za uvoz:\n{names}",
         "google_map_expired": "Izbor je istekao. Počnite ponovo sa 📎 Mapiraj na Google.",
-        "google_import_expired": "Izbor je istekao. Ponovo pokrenite uvoz Google.",
+        "google_import_expired": "Izbor je istekao. Ponovo pokrenite «Uvoz iz Google-a».",
         "google_mapped": "Mapirano na Google kalendar: {name}\nUvezeno postojećih: {created}; ažurirano: {updated}.",
         "google_imported": (
             "Uvezen {name} kao Meetifier kalendar #{id}.\n"
@@ -769,6 +874,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "calendar_not_owned": "Kalendar nije pronađen ili vam ne pripada.",
         "btn_next_event": "Sledeći događaj",
         "btn_this_week": "Ova nedelja",
+        "btn_next_week": "Sledeća nedelja",
+        "btn_this_month": "Ovaj mesec",
         "btn_google_cal": "Google kalendar #{n}",
         "btn_notify_attendees": "Obavesti Google učesnike",
         "btn_cancel": "Otkaži",
@@ -789,9 +896,13 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "invite_invalid": "Ova pozivnica je nevažeća ili je istekla.",
         "invited_to": "Pozvani ste u {name} ({timezone}).",
+        "par.invite_onboarding": (
+            "Zdravo! Da biste primali obaveštenja o «{event}» kod {organizer}, dodirnite dugme ispod:"
+        ),
         "btn_subscribe": "Pretplati se na {name}",
+        "btn_subscribe_short": "Pretplati se",
         "subscribed": "Pretplaćeni ste na {name}. Dodirnite 📅 Predstojeći da vidite događaje.",
-        "usage_upcoming": "Upotreba: /upcoming [next|week]",
+        "usage_upcoming": "Upotreba: /upcoming [next|week|next_week|month]",
         "no_pending_confirm": "Nema događaja koji čekaju potvrdu.",
         "tap_to_confirm": "Dodirnite datum da potvrdite prisustvo:",
         "choose_calendar_confirm": "Izaberite kalendar za potvrdu prisustva:",
@@ -822,8 +933,8 @@ MESSAGES: dict[str, dict[str, str]] = {
             "/newcalendar Naziv | 1 [| 24]\n"
             "/calendars\n"
             "/newevent CALENDAR_ID | Naslov | 2026-09-01 18:30 | MINUTI | NEDELJE\n"
-            "/events CALENDAR_ID [next|week]\n"
-            "/invite CALENDAR_ID\n"
+            "/events CALENDAR_ID [next|week|next_week|month]\n"
+            "/invite EVENT_ID\n"
             "/reschedule EVENT_ID | 2026-09-02 19:00\n"
             "/cancel EVENT_ID\n"
             "/confirmations CALENDAR_ID\n"
@@ -835,7 +946,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "par.help": (
             "Koristite dugmad menija ispod ili komande:\n\n"
-            "/upcoming [next|week] - predstojeći događaji\n"
+            "/upcoming [next|week|next_week|month] - predstojeći događaji\n"
             "/confirm EVENT_ID - potvrdi prisustvo\n"
             "/timezone 1\n"
             "/reminders CALENDAR_ID 60\n"
@@ -876,6 +987,17 @@ def t(locale: str | None, key: str, **kwargs: Any) -> str:
     if template is None:
         template = MESSAGES[DEFAULT_LOCALE].get(key, key)
     return template.format(**kwargs) if kwargs else template
+
+
+NO_EVENTS_KEYS = {
+    "week": "no_events_week",
+    "next_week": "no_events_next_week",
+    "month": "no_events_month",
+}
+
+
+def no_events_message(locale: str | None, range_mode: str) -> str:
+    return t(locale, NO_EVENTS_KEYS.get(range_mode, "no_events_upcoming"))
 
 
 def btn(labels: dict[str, dict[str, str]], action: str, locale: str | None) -> str:

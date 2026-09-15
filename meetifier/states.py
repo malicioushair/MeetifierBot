@@ -44,7 +44,7 @@ class OrganizerCancelEvent(StatesGroup):
 
 
 class OrganizerInvite(StatesGroup):
-    calendar = State()
+    event = State()
 
 
 class OrganizerEvents(StatesGroup):
@@ -82,29 +82,26 @@ class ParticipantTimezone(StatesGroup):
 
 
 class ParticipantReminders(StatesGroup):
-    calendar = State()
+    event = State()
     minutes = State()
 
 
 class ParticipantUpcoming(StatesGroup):
     range_pick = State()
-    calendar = State()
-    series = State()
 
 
 class ParticipantConfirmPick(StatesGroup):
-    calendar = State()
-    series = State()
+    event = State()
     occurrence = State()
 
 
 class ParticipantMute(StatesGroup):
-    calendar = State()
+    event = State()
 
 
 class ParticipantUnmute(StatesGroup):
-    calendar = State()
+    event = State()
 
 
 class ParticipantUnsubscribe(StatesGroup):
-    calendar = State()
+    event = State()

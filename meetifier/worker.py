@@ -31,7 +31,7 @@ async def process_due_jobs(db: Database, bot: Bot) -> int:
             calendar = await session.get(Calendar, occurrence.event.calendar_id) if occurrence else None
             sub = await session.scalar(select(Subscription).where(
                 Subscription.user_id == job.user_id,
-                Subscription.calendar_id == occurrence.event.calendar_id,
+                Subscription.event_id == occurrence.event_id,
             )) if occurrence else None
             kind_type, _, offset = job.kind.partition(":")
             is_confirm = kind_type == JOB_KIND_CONFIRM
@@ -90,11 +90,6 @@ async def run_google_sync_worker(db: Database, settings: Settings, participant_b
                 continue
             async with db.sessions() as session:
                 calendar = await session.get(Calendar, result.calendar_id)
-                users = list((await session.scalars(select(User).join(Subscription).where(
-                    Subscription.calendar_id == result.calendar_id,
-                    Subscription.active.is_(True),
-                    Subscription.muted.is_(False),
-                ))).all())
                 for change in result.changes:
                     occurrence = await session.scalar(
                         select(EventOccurrence)
@@ -103,6 +98,11 @@ async def run_google_sync_worker(db: Database, settings: Settings, participant_b
                     )
                     if not occurrence or not calendar:
                         continue
+                    users = list((await session.scalars(select(User).join(Subscription).where(
+                        Subscription.event_id == occurrence.event_id,
+                        Subscription.active.is_(True),
+                        Subscription.muted.is_(False),
+                    ))).all())
                     heading_key = {
                         "created": "heading_new_event",
                         "updated": "heading_event_updated",
