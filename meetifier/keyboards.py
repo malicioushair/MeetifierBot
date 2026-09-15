@@ -42,6 +42,7 @@ def organizer_main_menu(locale: str | None = None) -> ReplyKeyboardMarkup:
             [b("invite"), b("reschedule")],
             [b("cancel_event"), b("confirmations")],
             [b("abos"), b("confirm_timing")],
+            [b("confirm_message")],
             [b("google_link"), b("google_map")],
             [b("google_import"), b("google_sync")],
             [b("google_adopt")],
@@ -248,6 +249,15 @@ def abo_lesson_payment_keyboard(occurrence_id: int, locale: str | None = None) -
             text=t(locale, "abo_mark_lesson_clear"), callback_data=f"o_abo_clear_lesson:{occurrence_id}",
         )],
     ])
+
+
+def confirmation_reset_keyboard(calendar_id: int, locale: str | None = None) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text=t(locale, "btn_reset_confirmation_message"),
+            callback_data=f"o_confmsg_reset:{calendar_id}",
+        ),
+    ]])
 
 
 def abo_events_keyboard(

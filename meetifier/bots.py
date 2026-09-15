@@ -13,7 +13,7 @@ from .db import Calendar, Database, Event, EventOccurrence, GoogleCalendarLink, 
 from .i18n import DEFAULT_LOCALE, LOCALES, no_events_message, normalize_locale, t
 from .keyboards import (DT_IGNORE, DT_PREFIX, FLOW_BACK_DATA, FLOW_CANCEL_DATA, ORG_INPUT_BLOCKLIST,
                         PAR_INPUT_BLOCKLIST, abo_cycle_keyboard, abo_events_keyboard, abo_lesson_payment_keyboard,
-                        abo_lessons_keyboard, calendars_keyboard,
+                        abo_lessons_keyboard, calendars_keyboard, confirmation_reset_keyboard,
                         confirm_cancel_keyboard, confirm_google_adoption_keyboard, date_calendar_keyboard,
                         edit_scope_keyboard, event_confirm_keyboard, event_range_keyboard, event_series_keyboard,
                         flow_nav_keyboard, google_calendars_keyboard, google_onboarding_keyboard, hour_keyboard,
@@ -30,13 +30,16 @@ from .recurrence import RecurrenceRule, parse_local_naive
 from .service import (MENU_EVENT_RANGE_MODES, PAYMENT_NONE, PAYMENT_PAID, PAYMENT_UNPAID, abo_cycle_occurrences,
                       abo_occurrence_symbol, calendar_event_series, calendar_events, change_event, compute_abo_stats,
                       confirm_event, confirmations_for_event, confirmed_occurrence_ids, create_calendar, create_events,
-                      current_abo_cycle_index, dismiss_google_prompt, display_time, ensure_default_calendar,
-                      event_all_occurrences, event_occurrences, get_user_locale, invitation_event, make_invitation,
-                      mark_abo_cycle_paid, mark_org_onboarding_seen, owned_abo_events, owned_event, owned_future_events,
-                      set_confirmation_hours, set_locale, set_occurrence_payment, set_reminders, set_subscription_state,
+                      current_abo_cycle_index, default_confirmation_example, dismiss_google_prompt, display_time,
+                      ensure_default_calendar, event_all_occurrences, event_occurrences, get_user_locale,
+                      invitation_event, make_invitation, mark_abo_cycle_paid, mark_org_onboarding_seen,
+                      owned_abo_events, owned_calendar, owned_event, owned_future_events,
+                      set_confirmation_hours, set_confirmation_template, set_locale, set_occurrence_payment,
+                      set_reminders, set_subscription_state,
                       set_timezone, should_offer_org_onboarding, should_show_google_onboarding, subscribe,
                       upcoming_for_user_with_status)
-from .states import (OrganizerAboManage, OrganizerCancelEvent, OrganizerConfirmTiming, OrganizerConfirmations,
+from .states import (OrganizerAboManage, OrganizerCancelEvent, OrganizerConfirmMessage, OrganizerConfirmTiming,
+                     OrganizerConfirmations,
                      OrganizerEvents, OrganizerGoogleAdopt, OrganizerGoogleImport, OrganizerGoogleMap,
                      OrganizerGoogleSync, OrganizerInvite, OrganizerNewCalendar, OrganizerNewEvent,
                      OrganizerReschedule, ParticipantConfirmPick, ParticipantMute, ParticipantReminders,
@@ -493,6 +496,27 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                 calendars_keyboard(rows, "o_confirm_timing", locale, show_back=False),
                 locale, with_reply_nav=isinstance(target, Message),
             )
+        elif current == OrganizerConfirmMessage.text.state:
+            await state.set_state(OrganizerConfirmMessage.calendar)
+            await state.update_data(calendar_id=None, calendar_name=None)
+            async with db.sessions() as session:
+                rows = await fetch_owned_calendars(session, uid)
+            if not rows:
+                await cancel()
+                return
+            if len(rows) == 1:
+                calendar = rows[0]
+                await state.update_data(calendar_id=calendar.id, calendar_name=calendar.name)
+                await state.set_state(OrganizerConfirmMessage.text)
+                await prompt_confirmation_message_edit(target, calendar, locale)
+                return
+            await prompt_inline(
+                target, t(locale, "choose_calendar_confirm_message"),
+                calendars_keyboard(rows, "o_confmsg", locale, show_back=False),
+                locale, with_reply_nav=isinstance(target, Message),
+            )
+        elif current == OrganizerConfirmMessage.calendar.state:
+            await cancel()
         elif current == OrganizerNewEvent.calendar.state:
             await cancel()
         elif current == OrganizerNewEvent.title.state:
@@ -934,6 +958,120 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             )
         except (ValueError, PermissionError) as exc:
             await flow_err(message, locale, exc, t(locale, "enter_confirmation_hours"))
+
+    async def prompt_confirmation_message_edit(
+        target: Message | CallbackQuery, calendar: Calendar, locale: str,
+    ) -> None:
+        current = (calendar.confirmation_template or "").strip() or default_confirmation_example(locale)
+        prompt = t(
+            locale, "enter_confirmation_message",
+            name=calendar.name, example=default_confirmation_example(locale),
+        )
+        markup = confirmation_reset_keyboard(calendar.id, locale)
+        if isinstance(target, CallbackQuery):
+            await target.message.edit_text(prompt)
+            await target.message.answer(
+                t(locale, "confirmation_message_current", name=calendar.name, text=current),
+                reply_markup=markup,
+            )
+            await target.answer()
+        else:
+            await target.answer(prompt, reply_markup=flow_nav_keyboard(locale))
+            await target.answer(
+                t(locale, "confirmation_message_current", name=calendar.name, text=current),
+                reply_markup=markup,
+            )
+
+    @router.message(Command("confirm_message"))
+    @router.message(F.text.in_(org_texts("confirm_message")))
+    async def confirm_message_start(message: Message, state: FSMContext, command: CommandObject | None = None) -> None:
+        locale = await locale_for(message.from_user.id)
+        if command and command.args:
+            await state.clear()
+            try:
+                calendar_id = int(command.args.strip())
+                async with db.sessions() as session:
+                    calendar = await owned_calendar(session, message.from_user.id, calendar_id)
+                    if not calendar:
+                        raise PermissionError(t(locale, "calendar_not_owned"))
+                await state.set_state(OrganizerConfirmMessage.text)
+                await state.update_data(calendar_id=calendar.id, calendar_name=calendar.name)
+                await prompt_confirmation_message_edit(message, calendar, locale)
+            except (ValueError, PermissionError) as exc:
+                await err(message, locale, exc)
+            return
+        await state.clear()
+        async with db.sessions() as session:
+            rows = await fetch_owned_calendars(session, message.from_user.id)
+        if not rows:
+            await message.answer(t(locale, "no_calendars_create"), reply_markup=organizer_main_menu(locale))
+            return
+        if len(rows) == 1:
+            calendar = rows[0]
+            await state.set_state(OrganizerConfirmMessage.text)
+            await state.update_data(calendar_id=calendar.id, calendar_name=calendar.name)
+            await prompt_confirmation_message_edit(message, calendar, locale)
+            return
+        await state.set_state(OrganizerConfirmMessage.calendar)
+        await prompt_inline(
+            message, t(locale, "choose_calendar_confirm_message"),
+            calendars_keyboard(rows, "o_confmsg", locale, show_back=False),
+            locale, with_reply_nav=True,
+        )
+
+    @router.callback_query(F.data.startswith("o_confmsg:"))
+    async def confirm_message_pick_calendar(callback: CallbackQuery, state: FSMContext) -> None:
+        calendar_id = int(callback.data.split(":", 1)[1])
+        locale = await locale_for(callback.from_user.id)
+        async with db.sessions() as session:
+            calendar = await owned_calendar(session, callback.from_user.id, calendar_id)
+        if not calendar:
+            await callback.answer(t(locale, "calendar_not_owned"), show_alert=True)
+            return
+        await state.set_state(OrganizerConfirmMessage.text)
+        await state.update_data(calendar_id=calendar.id, calendar_name=calendar.name)
+        await prompt_confirmation_message_edit(callback, calendar, locale)
+
+    @router.callback_query(F.data.startswith("o_confmsg_reset:"))
+    async def confirm_message_reset(callback: CallbackQuery, state: FSMContext) -> None:
+        calendar_id = int(callback.data.split(":", 1)[1])
+        locale = await locale_for(callback.from_user.id)
+        try:
+            async with db.sessions() as session:
+                calendar = await set_confirmation_template(session, callback.from_user.id, calendar_id, None)
+            await state.clear()
+            await callback.message.edit_text(
+                t(locale, "confirmation_message_reset", name=calendar.name),
+            )
+            await restore_menu(callback, locale)
+            await callback.answer()
+        except PermissionError as exc:
+            await callback.answer(str(exc), show_alert=True)
+
+    @router.message(OrganizerConfirmMessage.text, ~F.text.in_(ORG_INPUT_BLOCKLIST))
+    async def confirm_message_text(message: Message, state: FSMContext) -> None:
+        locale = await locale_for(message.from_user.id)
+        data = await state.get_data()
+        calendar_name = data.get("calendar_name", "")
+        try:
+            async with db.sessions() as session:
+                calendar = await set_confirmation_template(
+                    session, message.from_user.id, int(data["calendar_id"]), message.text,
+                )
+            await state.clear()
+            await message.answer(
+                t(locale, "confirmation_message_saved", name=calendar.name),
+                reply_markup=organizer_main_menu(locale),
+            )
+        except (ValueError, PermissionError) as exc:
+            await flow_err(
+                message, locale, exc,
+                t(
+                    locale, "enter_confirmation_message",
+                    name=calendar_name,
+                    example=default_confirmation_example(locale),
+                ),
+            )
 
     async def pick_calendar(
         message: Message, prefix: str, prompt_key: str, locale: str, *, show_back: bool = False,

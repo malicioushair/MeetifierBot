@@ -23,6 +23,11 @@ ORG_BTN = {
     "confirmations": {"en": "✅ Confirmations", "ru": "✅ Подтверждения", "sr": "✅ Potvrde"},
     "abos": {"en": "💳 Abos", "ru": "💳 Абонементы", "sr": "💳 Abonamenti"},
     "confirm_timing": {"en": "⏱ Attendance ask", "ru": "⏱ Запрос участия", "sr": "⏱ Zahtev prisustva"},
+    "confirm_message": {
+        "en": "📝 Attendance message",
+        "ru": "📝 Текст запроса участия",
+        "sr": "📝 Poruka za potvrdu",
+    },
     "google_link": {"en": "🔗 Link Google", "ru": "🔗 Связать Google", "sr": "🔗 Poveži Google"},
     "google_map": {"en": "📎 Map to Google", "ru": "📎 Привязать к Google", "sr": "📎 Mapiraj na Google"},
     "google_import": {"en": "⬇️ Import from Google", "ru": "⬇️ Импорт из Google", "sr": "⬇️ Uvoz iz Google-a"},
@@ -93,6 +98,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "❌ Cancel event — cancel and notify subscribers\n"
             "✅ Confirmations — who confirmed attendance\n"
             "⏱ Attendance ask — when participants are asked to confirm (default 24h before)\n"
+            "📝 Attendance message — customize the attendance confirmation text for a calendar\n"
             "🔗 Link Google / 📎 Map / ⬇️ Import / 🔄 Sync / 📣 Invite Google guests — optional Google Calendar sync\n"
             "🌐 Language — switch en / ru / sr\n"
             "❓ Help — command examples\n\n"
@@ -139,8 +145,21 @@ MESSAGES: dict[str, dict[str, str]] = {
             "Hours before the event (default 24). Comma-separated allowed:"
         ),
         "choose_calendar_confirm_timing": "Choose a calendar to set attendance-ask timing:",
+        "choose_calendar_confirm_message": "Choose a calendar to edit the attendance confirmation message:",
         "confirmation_timing_saved": "Attendance-ask timing saved: {hours} h before each event.",
         "usage_confirm_timing": "Usage: /confirm_timing CALENDAR_ID 24",
+        "usage_confirm_message": "Usage: /confirm_message CALENDAR_ID",
+        "enter_confirmation_message": (
+            "Enter the attendance confirmation message for all events in «{name}».\n\n"
+            "Placeholders: {{title}}, {{time}}, {{calendar}}, {{hours}}\n\n"
+            "Default example:\n{example}\n\n"
+            "Send your text, or tap Reset to use the default message."
+        ),
+        "confirmation_message_current": "Current message for «{name}»:\n{text}",
+        "confirmation_message_saved": "Attendance confirmation message saved for all events in «{name}».",
+        "confirmation_message_reset": "Attendance confirmation message reset to default for «{name}».",
+        "confirmation_example_title": "Example lesson",
+        "btn_reset_confirmation_message": "Reset to default",
         "what_to_see": "What would you like to see?",
         "choose_calendar": "Choose a calendar:",
         "choose_event_invite": "Choose an event to invite to:",
@@ -357,6 +376,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "/cancel EVENT_ID\n"
             "/confirmations CALENDAR_ID\n"
             "/confirm_timing CALENDAR_ID 24\n"
+            "/confirm_message CALENDAR_ID\n"
             "/language\n\n"
             "Google (optional): Link Google, then import a filled calendar or map an existing Meetifier calendar.\n"
             "Mapped calendars sync both ways. Use Invite Google guests to add the participant-bot link to upcoming events.\n\n"
@@ -383,6 +403,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "cmd.upcoming": "Upcoming events",
         "cmd.confirm": "Confirm attendance",
         "cmd.confirm_timing": "Attendance ask timing",
+        "cmd.confirm_message": "Attendance confirmation message",
         "cmd.subscriptions": "My events",
         "cmd.language": "Change language",
     },
@@ -428,6 +449,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "❌ Отменить событие — отмена и уведомление подписчиков\n"
             "✅ Подтверждения — кто подтвердил участие\n"
             "⏱ Запрос участия — когда спрашивать подтверждение (по умолчанию за 24 ч)\n"
+            "📝 Текст запроса участия — настройка текста подтверждения участия для календаря\n"
             "🔗 Связать Google / 📎 Привязать / ⬇️ Импорт / 🔄 Синхронизация / 📣 Пригласить гостей Google — опциональный синк\n"
             "🌐 Язык — en / ru / sr\n"
             "❓ Помощь — примеры команд\n\n"
@@ -474,8 +496,21 @@ MESSAGES: dict[str, dict[str, str]] = {
             "Часы до события (по умолчанию 24). Можно через запятую:"
         ),
         "choose_calendar_confirm_timing": "Выберите календарь для настройки запроса участия:",
+        "choose_calendar_confirm_message": "Выберите календарь для редактирования текста запроса участия:",
         "confirmation_timing_saved": "Запрос участия сохранён: за {hours} ч до каждого события.",
         "usage_confirm_timing": "Использование: /confirm_timing CALENDAR_ID 24",
+        "usage_confirm_message": "Использование: /confirm_message CALENDAR_ID",
+        "enter_confirmation_message": (
+            "Введите текст запроса участия для всех событий в «{name}».\n\n"
+            "Подстановки: {{title}}, {{time}}, {{calendar}}, {{hours}}\n\n"
+            "Пример по умолчанию:\n{example}\n\n"
+            "Отправьте текст или нажмите «Сбросить»."
+        ),
+        "confirmation_message_current": "Текущее сообщение для «{name}»:\n{text}",
+        "confirmation_message_saved": "Текст запроса участия сохранён для всех событий в «{name}».",
+        "confirmation_message_reset": "Текст запроса участия сброшен на стандартный для «{name}».",
+        "confirmation_example_title": "Пример занятия",
+        "btn_reset_confirmation_message": "Сбросить",
         "what_to_see": "Что показать?",
         "choose_calendar": "Выберите календарь:",
         "choose_event_invite": "Выберите событие для приглашения:",
@@ -692,6 +727,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "/cancel EVENT_ID\n"
             "/confirmations CALENDAR_ID\n"
             "/confirm_timing CALENDAR_ID 24\n"
+            "/confirm_message CALENDAR_ID\n"
             "/language\n\n"
             "Google (опционально): свяжите Google, затем импортируйте календарь или привяжите существующий.\n"
             "Привязанные календари синхронизируются в обе стороны.\n\n"
@@ -718,6 +754,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "cmd.upcoming": "Ближайшие события",
         "cmd.confirm": "Подтвердить участие",
         "cmd.confirm_timing": "Запрос участия",
+        "cmd.confirm_message": "Текст запроса участия",
         "cmd.subscriptions": "Мои календари",
         "cmd.language": "Сменить язык",
     },
@@ -763,6 +800,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "❌ Otkaži događaj — otkazivanje i obaveštavanje pretplatnika\n"
             "✅ Potvrde — ko je potvrdio prisustvo\n"
             "⏱ Zahtev prisustva — kada učesnici dobijaju zahtev za potvrdu (podrazumevano 24h pre)\n"
+            "📝 Poruka za potvrdu — prilagodite tekst zahteva za potvrdu prisustva za kalendar\n"
             "🔗 Poveži Google / 📎 Mapiraj / ⬇️ Uvoz / 🔄 Sinhronizuj / 📣 Pozovi Google goste — opciona Google sinhronizacija\n"
             "🌐 Jezik — en / ru / sr\n"
             "❓ Pomoć — primeri komandi\n\n"
@@ -809,8 +847,21 @@ MESSAGES: dict[str, dict[str, str]] = {
             "Sati pre događaja (podrazumevano 24). Dozvoljeno više vrednosti odvojenih zarezom:"
         ),
         "choose_calendar_confirm_timing": "Izaberite kalendar za podešavanje zahteva prisustva:",
+        "choose_calendar_confirm_message": "Izaberite kalendar za izmenu poruke za potvrdu prisustva:",
         "confirmation_timing_saved": "Zahtev prisustva sačuvan: {hours} h pre svakog događaja.",
         "usage_confirm_timing": "Upotreba: /confirm_timing CALENDAR_ID 24",
+        "usage_confirm_message": "Upotreba: /confirm_message CALENDAR_ID",
+        "enter_confirmation_message": (
+            "Unesite poruku za potvrdu prisustva za sve događaje u «{name}».\n\n"
+            "Zamenjivi delovi: {{title}}, {{time}}, {{calendar}}, {{hours}}\n\n"
+            "Podrazumevani primer:\n{example}\n\n"
+            "Pošaljite tekst ili dodirnite Resetuj."
+        ),
+        "confirmation_message_current": "Trenutna poruka za «{name}»:\n{text}",
+        "confirmation_message_saved": "Poruka za potvrdu prisustva sačuvana za sve događaje u «{name}».",
+        "confirmation_message_reset": "Poruka za potvrdu prisustva vraćena na podrazumevanu za «{name}».",
+        "confirmation_example_title": "Primer časa",
+        "btn_reset_confirmation_message": "Resetuj",
         "what_to_see": "Šta želite da vidite?",
         "choose_calendar": "Izaberite kalendar:",
         "choose_event_invite": "Izaberite događaj za pozivnicu:",
@@ -1027,6 +1078,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "/cancel EVENT_ID\n"
             "/confirmations CALENDAR_ID\n"
             "/confirm_timing CALENDAR_ID 24\n"
+            "/confirm_message CALENDAR_ID\n"
             "/language\n\n"
             "Google (opciono): povežite Google, zatim uvezite ili mapirajte kalendar.\n"
             "Mapirani kalendari se sinhronizuju u oba smera.\n\n"
@@ -1053,6 +1105,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "cmd.upcoming": "Predstojeći događaji",
         "cmd.confirm": "Potvrdi prisustvo",
         "cmd.confirm_timing": "Zahtev prisustva",
+        "cmd.confirm_message": "Poruka za potvrdu prisustva",
         "cmd.subscriptions": "Moji kalendari",
         "cmd.language": "Promeni jezik",
     },

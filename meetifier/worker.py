@@ -12,7 +12,7 @@ from .config import Settings
 from .google_sync import sync_all_google_calendars
 from .i18n import normalize_locale, t
 from .keyboards import event_confirm_keyboard
-from .service import JOB_KIND_CONFIRM, JOB_KIND_REMINDER, display_time
+from .service import JOB_KIND_CONFIRM, JOB_KIND_REMINDER, display_time, render_confirmation_request
 
 
 async def process_due_jobs(db: Database, bot: Bot) -> int:
@@ -51,9 +51,12 @@ async def process_due_jobs(db: Database, bot: Bot) -> int:
                 locale = normalize_locale(user.locale)
                 time_text = display_time(occurrence.start_utc, user.timezone)
                 if is_confirm:
-                    text = t(
-                        locale, "confirm_request", hours=offset, title=occurrence.event.title,
-                        time=time_text, calendar=calendar.name,
+                    text = render_confirmation_request(
+                        calendar, locale,
+                        title=occurrence.event.title,
+                        time=time_text,
+                        calendar=calendar.name,
+                        hours=offset,
                     )
                     markup = event_confirm_keyboard(occurrence.id, locale)
                 else:

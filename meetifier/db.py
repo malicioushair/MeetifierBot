@@ -63,6 +63,7 @@ class Calendar(Base):
     name: Mapped[str] = mapped_column(String(200))
     timezone: Mapped[int] = mapped_column(UtcOffsetHours, default=0)
     confirmation_hours: Mapped[str] = mapped_column(String(100), default=DEFAULT_CONFIRMATION_HOURS)
+    confirmation_template: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     events: Mapped[list["Event"]] = relationship(back_populates="calendar")
 
@@ -263,3 +264,7 @@ def _migrate_abo_columns(connection) -> None:
             connection.execute(text(
                 f"ALTER TABLE event_occurrences ADD COLUMN payment_status VARCHAR(10) NOT NULL DEFAULT {str_default}"
             ))
+    if "calendars" in inspector.get_table_names():
+        cal_cols = {col["name"] for col in inspector.get_columns("calendars")}
+        if "confirmation_template" not in cal_cols:
+            connection.execute(text("ALTER TABLE calendars ADD COLUMN confirmation_template TEXT"))

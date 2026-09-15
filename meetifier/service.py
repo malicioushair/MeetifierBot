@@ -23,11 +23,12 @@ from .db import (
     User,
     utcnow,
 )
-from .i18n import DEFAULT_LOCALE, normalize_locale
+from .i18n import DEFAULT_LOCALE, normalize_locale, t
 from .recurrence import RecurrenceRule
 
 JOB_KIND_CONFIRM = "confirm"
 JOB_KIND_REMINDER = "reminder"
+MAX_CONFIRMATION_TEMPLATE_LENGTH = 4000
 
 
 def parse_minutes(value: str) -> list[int]:
@@ -306,6 +307,57 @@ async def create_calendar(session: AsyncSession, telegram_id: int, name: str, tz
 async def owned_calendar(session: AsyncSession, telegram_id: int, calendar_id: int) -> Calendar | None:
     return await session.scalar(select(Calendar).join(User, User.id == Calendar.owner_user_id).where(
         Calendar.id == calendar_id, User.telegram_id == telegram_id))
+
+
+def render_confirmation_request(
+    calendar_obj: Calendar,
+    locale: str,
+    *,
+    title: str,
+    time: str,
+    calendar: str,
+    hours: str,
+) -> str:
+    template = (calendar_obj.confirmation_template or "").strip()
+    context = {
+        "title": title,
+        "time": time,
+        "calendar": calendar,
+        "hours": hours,
+    }
+    if template:
+        try:
+            return template.format(**context)
+        except (KeyError, ValueError, IndexError):
+            return template
+    return t(locale, "confirm_request", **context)
+
+
+def default_confirmation_example(locale: str) -> str:
+    return t(
+        locale, "confirm_request",
+        hours="24",
+        title=t(locale, "confirmation_example_title"),
+        time="2030-01-01 10:00 (UTC+0)",
+        calendar=t(locale, "default_calendar_name"),
+    )
+
+
+async def set_confirmation_template(
+    session: AsyncSession, owner_telegram_id: int, calendar_id: int, template: str | None,
+) -> Calendar:
+    calendar = await owned_calendar(session, owner_telegram_id, calendar_id)
+    if not calendar:
+        raise PermissionError("Calendar not found or not owned by you")
+    if template is not None:
+        template = template.strip()
+        if len(template) > MAX_CONFIRMATION_TEMPLATE_LENGTH:
+            raise ValueError(f"Template must be at most {MAX_CONFIRMATION_TEMPLATE_LENGTH} characters")
+        if not template:
+            template = None
+    calendar.confirmation_template = template
+    await session.commit()
+    return calendar
 
 
 async def owned_event(session: AsyncSession, telegram_id: int, event_id: int) -> Event | None:

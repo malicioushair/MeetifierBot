@@ -14,6 +14,11 @@ class OrganizerConfirmTiming(StatesGroup):
     minutes = State()
 
 
+class OrganizerConfirmMessage(StatesGroup):
+    calendar = State()
+    text = State()
+
+
 class OrganizerNewEvent(StatesGroup):
     calendar = State()
     title = State()

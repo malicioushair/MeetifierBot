@@ -11,7 +11,8 @@ from meetifier.service import (PAYMENT_PAID, PAYMENT_UNPAID, abo_cycle_occurrenc
                                confirmations_for_event, create_calendar, create_events, current_abo_cycle_index,
                                display_time, event_all_occurrences, event_occurrences, local_to_utc, make_invitation,
                                mark_abo_cycle_paid, month_bounds_utc, next_week_bounds_utc, owned_abo_events,
-                               owned_future_events, parse_minutes, set_occurrence_payment, set_subscription_state,
+                               owned_future_events, parse_minutes, render_confirmation_request,
+                               set_confirmation_template, set_occurrence_payment, set_subscription_state,
                                subscribe, week_bounds_utc)
 from meetifier.worker import process_due_jobs
 
@@ -473,3 +474,25 @@ async def test_abo_passed_lessons(db):
         assert abo_occurrence_symbol(event, all_occ[5]) == "✓"
         await set_occurrence_payment(session, 100, all_occ[5].id, PAYMENT_PAID)
         assert abo_occurrence_symbol(event, all_occ[5]) == "💰✓"
+
+
+async def test_confirmation_template(db):
+    calendar = await prepared(db)
+    async with db.sessions() as session:
+        default = render_confirmation_request(
+            calendar, "en",
+            title="Class", time="10:00", calendar="Math", hours="24",
+        )
+        assert "Please confirm attendance" in default
+        await set_confirmation_template(
+            session, 100, calendar.id, "Hi {title}! Confirm by {time} ({calendar}), {hours}h before.",
+        )
+        calendar = await session.get(Calendar, calendar.id)
+        custom = render_confirmation_request(
+            calendar, "en",
+            title="Class", time="10:00", calendar="Math", hours="24",
+        )
+        assert custom == "Hi Class! Confirm by 10:00 (Math), 24h before."
+        await set_confirmation_template(session, 100, calendar.id, None)
+        calendar = await session.get(Calendar, calendar.id)
+        assert calendar.confirmation_template is None
