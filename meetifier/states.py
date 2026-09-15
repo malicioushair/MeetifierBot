@@ -25,6 +25,14 @@ class OrganizerNewEvent(StatesGroup):
     monthly_pos = State()
     monthly_weekday = State()
     count = State()
+    is_abo = State()
+    abo_lesson_count = State()
+
+
+class OrganizerAboManage(StatesGroup):
+    event = State()
+    cycle = State()
+    occurrence = State()
 
 
 class OrganizerReschedule(StatesGroup):

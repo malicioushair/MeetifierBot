@@ -5,7 +5,8 @@ from datetime import date
 
 from aiogram.types import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
-from .db import Calendar, Event
+from .db import Calendar, Event, EventOccurrence
+from .service import abo_occurrence_symbol, display_time
 from .i18n import LOCALES, LOCALE_LABELS, NAV_BTN, ORG_BTN, PAR_BTN, all_btn_texts, btn, t
 
 ORGANIZER_BUTTONS = all_btn_texts(ORG_BTN)
@@ -40,7 +41,7 @@ def organizer_main_menu(locale: str | None = None) -> ReplyKeyboardMarkup:
             [b("new_event"), b("events")],
             [b("invite"), b("reschedule")],
             [b("cancel_event"), b("confirmations")],
-            [b("confirm_timing")],
+            [b("abos"), b("confirm_timing")],
             [b("google_link"), b("google_map")],
             [b("google_import"), b("google_sync")],
             [b("google_adopt")],
@@ -162,6 +163,10 @@ def calendars_keyboard(
     return attach_flow_nav(markup, locale, show_back=show_back) if with_nav else markup
 
 
+def _event_series_label(event: Event) -> str:
+    return f"📦 {event.title}" if event.is_abo else event.title
+
+
 def event_series_keyboard(
     events: list[Event],
     prefix: str,
@@ -172,11 +177,95 @@ def event_series_keyboard(
 ) -> InlineKeyboardMarkup:
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=event.title, callback_data=f"{prefix}:{event.id}")]
+            [InlineKeyboardButton(text=_event_series_label(event), callback_data=f"{prefix}:{event.id}")]
             for event in events
         ]
     )
     return attach_flow_nav(markup, locale, show_back=show_back) if with_nav else markup
+
+
+def is_abo_keyboard(locale: str | None = None) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(locale, "btn_abo_yes"), callback_data="o_new_abo:yes")],
+        [InlineKeyboardButton(text=t(locale, "btn_abo_no"), callback_data="o_new_abo:no")],
+    ])
+
+
+def abo_cycle_keyboard(
+    event_id: int,
+    cycle_index: int,
+    cycle_count: int,
+    locale: str | None = None,
+) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(
+        text=t(locale, "abo_mark_cycle_paid"), callback_data=f"o_abo_cycle_pay:{event_id}:{cycle_index}",
+    )]]
+    nav = []
+    if cycle_index > 0:
+        nav.append(InlineKeyboardButton(
+            text=t(locale, "abo_prev_cycle"), callback_data=f"o_abo_cycle:{event_id}:{cycle_index - 1}",
+        ))
+    if cycle_index < cycle_count - 1:
+        nav.append(InlineKeyboardButton(
+            text=t(locale, "abo_next_cycle"), callback_data=f"o_abo_cycle:{event_id}:{cycle_index + 1}",
+        ))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(
+        text=t(locale, "abo_choose_lesson"), callback_data=f"o_abo_pick_lesson:{event_id}:{cycle_index}",
+    )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def abo_lessons_keyboard(
+    event: Event,
+    occurrences: list[EventOccurrence],
+    calendar: Calendar,
+    cycle_index: int,
+    locale: str | None = None,
+) -> InlineKeyboardMarkup:
+    rows = []
+    for occ in occurrences:
+        sym = abo_occurrence_symbol(event, occ)
+        label = f"{display_time(occ.start_utc, calendar.timezone)} {sym}".strip()
+        rows.append([InlineKeyboardButton(
+            text=label, callback_data=f"o_abo_lesson:{occ.id}",
+        )])
+    return attach_flow_nav(InlineKeyboardMarkup(inline_keyboard=rows), locale)
+
+
+def abo_lesson_payment_keyboard(occurrence_id: int, locale: str | None = None) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text=t(locale, "abo_mark_lesson_paid"), callback_data=f"o_abo_pay_lesson:{occurrence_id}",
+            ),
+            InlineKeyboardButton(
+                text=t(locale, "abo_mark_lesson_unpaid"), callback_data=f"o_abo_unpay_lesson:{occurrence_id}",
+            ),
+        ],
+        [InlineKeyboardButton(
+            text=t(locale, "abo_mark_lesson_clear"), callback_data=f"o_abo_clear_lesson:{occurrence_id}",
+        )],
+    ])
+
+
+def abo_events_keyboard(
+    items: list[tuple[Event, Calendar]],
+    locale: str | None = None,
+    *,
+    show_back: bool = True,
+) -> InlineKeyboardMarkup:
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(
+                text=f"📦 {event.title}",
+                callback_data=f"o_abo_evt:{event.id}",
+            )]
+            for event, _calendar in items
+        ]
+    )
+    return attach_flow_nav(markup, locale, show_back=show_back)
 
 
 def owned_events_keyboard(

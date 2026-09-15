@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select, update
@@ -327,6 +328,165 @@ async def ensure_default_calendar(
     return await create_calendar(session, telegram_id, name, default_tz, default_tz)
 
 
+PAYMENT_NONE = "none"
+PAYMENT_PAID = "paid"
+PAYMENT_UNPAID = "unpaid"
+PAYMENT_STATUSES = frozenset({PAYMENT_NONE, PAYMENT_PAID, PAYMENT_UNPAID})
+
+
+@dataclass(frozen=True)
+class AboStats:
+    cycle_index: int
+    cycle_count: int
+    total: int
+    passed: int
+    remaining: int
+    paid_left: int
+    unpaid: int
+    unset: int
+
+
+def active_occurrences_sorted(occurrences: list[EventOccurrence]) -> list[EventOccurrence]:
+    return sorted(
+        [occ for occ in occurrences if occ.status == "active"],
+        key=lambda occ: occ.start_utc,
+    )
+
+
+def abo_cycle_count(event: Event, occurrences: list[EventOccurrence]) -> int:
+    lesson_count = event.abo_lesson_count or 1
+    active_count = len(active_occurrences_sorted(occurrences))
+    if active_count == 0:
+        return 0
+    return (active_count - 1) // lesson_count + 1
+
+
+def current_abo_cycle_index(event: Event, occurrences: list[EventOccurrence], now: datetime | None = None) -> int:
+    now = now or utcnow()
+    active = active_occurrences_sorted(occurrences)
+    if not active:
+        return 0
+    lesson_count = event.abo_lesson_count or 1
+    for index, occ in enumerate(active):
+        if occ.start_utc > now:
+            return index // lesson_count
+    return (len(active) - 1) // lesson_count
+
+
+def abo_cycle_occurrences(
+    event: Event, occurrences: list[EventOccurrence], cycle_index: int,
+) -> list[EventOccurrence]:
+    active = active_occurrences_sorted(occurrences)
+    lesson_count = event.abo_lesson_count or 1
+    start = cycle_index * lesson_count
+    return active[start:start + lesson_count]
+
+
+def compute_abo_stats(
+    event: Event,
+    occurrences: list[EventOccurrence],
+    cycle_index: int | None = None,
+    now: datetime | None = None,
+) -> AboStats:
+    now = now or utcnow()
+    cycle_index = cycle_index if cycle_index is not None else current_abo_cycle_index(event, occurrences, now)
+    cycle_occ = abo_cycle_occurrences(event, occurrences, cycle_index)
+    passed = sum(1 for occ in cycle_occ if occ.start_utc <= now)
+    remaining = sum(1 for occ in cycle_occ if occ.start_utc > now)
+    paid_left = sum(
+        1 for occ in cycle_occ if occ.payment_status == PAYMENT_PAID and occ.start_utc > now
+    )
+    unpaid = sum(1 for occ in cycle_occ if occ.payment_status == PAYMENT_UNPAID)
+    unset = sum(1 for occ in cycle_occ if occ.payment_status == PAYMENT_NONE)
+    return AboStats(
+        cycle_index=cycle_index,
+        cycle_count=abo_cycle_count(event, occurrences),
+        total=len(cycle_occ),
+        passed=passed,
+        remaining=remaining,
+        paid_left=paid_left,
+        unpaid=unpaid,
+        unset=unset,
+    )
+
+
+def abo_occurrence_symbol(event: Event, occurrence: EventOccurrence, now: datetime | None = None) -> str:
+    if not event.is_abo:
+        return ""
+    if occurrence.status == "cancelled":
+        return "❌"
+    now = now or utcnow()
+    passed = occurrence.status == "active" and occurrence.start_utc <= now
+    if occurrence.payment_status == PAYMENT_PAID:
+        payment = "💰"
+    elif occurrence.payment_status == PAYMENT_UNPAID:
+        payment = "⭕"
+    else:
+        payment = "✓" if passed else ""
+        return payment
+    return f"{payment}{'✓' if passed else ''}"
+
+
+async def event_all_occurrences(session: AsyncSession, event_id: int) -> list[EventOccurrence]:
+    return list((await session.scalars(
+        select(EventOccurrence)
+        .options(selectinload(EventOccurrence.event))
+        .where(EventOccurrence.event_id == event_id)
+        .order_by(EventOccurrence.start_utc)
+    )).all())
+
+
+async def owned_abo_events(session: AsyncSession, telegram_id: int) -> list[tuple[Event, Calendar]]:
+    rows = await session.execute(
+        select(Event, Calendar)
+        .join(Calendar, Event.calendar_id == Calendar.id)
+        .join(User, Calendar.owner_user_id == User.id)
+        .where(User.telegram_id == telegram_id, Event.status == "active", Event.is_abo.is_(True))
+        .order_by(Event.title)
+    )
+    return list(rows.tuples().all())
+
+
+async def mark_abo_cycle_paid(
+    session: AsyncSession,
+    owner_telegram_id: int,
+    event_id: int,
+    cycle_index: int | None = None,
+) -> Event:
+    event = await owned_event(session, owner_telegram_id, event_id)
+    if not event or not event.is_abo:
+        raise PermissionError("Abo not found or not owned by you")
+    occurrences = await event_all_occurrences(session, event.id)
+    cycle_index = cycle_index if cycle_index is not None else current_abo_cycle_index(event, occurrences)
+    for occ in abo_cycle_occurrences(event, occurrences, cycle_index):
+        occ.payment_status = PAYMENT_PAID
+    await session.commit()
+    return event
+
+
+async def set_occurrence_payment(
+    session: AsyncSession,
+    owner_telegram_id: int,
+    occurrence_id: int,
+    payment_status: str,
+) -> EventOccurrence:
+    if payment_status not in PAYMENT_STATUSES:
+        raise ValueError("Payment status must be none, paid, or unpaid")
+    occurrence = await session.scalar(
+        select(EventOccurrence)
+        .join(Event)
+        .join(Calendar)
+        .join(User)
+        .options(selectinload(EventOccurrence.event))
+        .where(EventOccurrence.id == occurrence_id, User.telegram_id == owner_telegram_id)
+    )
+    if not occurrence or not occurrence.event.is_abo:
+        raise PermissionError("Lesson not found or not part of an abo")
+    occurrence.payment_status = payment_status
+    await session.commit()
+    return occurrence
+
+
 async def create_events(
     session: AsyncSession,
     owner_telegram_id: int,
@@ -336,6 +496,9 @@ async def create_events(
     duration_minutes: int,
     weeks: int | None = None,
     rule: RecurrenceRule | None = None,
+    *,
+    is_abo: bool = False,
+    abo_lesson_count: int | None = None,
 ) -> list[EventOccurrence]:
     from .recurrence import generate_starts_utc, parse_local_naive, rule_from_legacy_weeks
 
@@ -348,7 +511,13 @@ async def create_events(
         anchor_weekday = parse_local_naive(local_start).weekday()
         rule = rule_from_legacy_weeks(weeks, anchor_weekday)
     starts = generate_starts_utc(rule, local_start, calendar.timezone, duration_minutes)
-    event = Event(calendar_id=calendar.id, title=title.strip(), recurrence_json=rule.to_json())
+    event = Event(
+        calendar_id=calendar.id,
+        title=title.strip(),
+        recurrence_json=rule.to_json(),
+        is_abo=is_abo,
+        abo_lesson_count=abo_lesson_count if is_abo else None,
+    )
     session.add(event)
     await session.flush()
     occurrences: list[EventOccurrence] = []
@@ -421,6 +590,11 @@ async def subscribe(session: AsyncSession, telegram_id: int, token: str, default
     user = await get_or_create_user(session, telegram_id, default_tz)
     sub = await session.scalar(select(Subscription).where(
         Subscription.user_id == user.id, Subscription.event_id == event.id))
+    if event.is_abo:
+        if event.abo_student_user_id is None:
+            event.abo_student_user_id = user.id
+        elif event.abo_student_user_id != user.id:
+            raise ValueError("This abo is already assigned to another student")
     if sub:
         sub.active, sub.muted = True, False
     else:

@@ -77,6 +77,13 @@ class Event(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(20), default="active")
     recurrence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_abo: Mapped[bool] = mapped_column(Boolean, default=False)
+    abo_student_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    abo_lesson_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Legacy columns kept for existing databases; no longer used by application logic.
+    abo_total_lessons: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    abo_paid: Mapped[bool] = mapped_column(Boolean, default=False)
+    abo_paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
     calendar: Mapped["Calendar"] = relationship(back_populates="events")
@@ -93,6 +100,7 @@ class EventOccurrence(Base):
     start_utc: Mapped[datetime] = mapped_column(DateTime, index=True)
     end_utc: Mapped[datetime] = mapped_column(DateTime)
     status: Mapped[str] = mapped_column(String(20), default="active")
+    payment_status: Mapped[str] = mapped_column(String(10), default="none")
     version: Mapped[int] = mapped_column(Integer, default=1)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
     event: Mapped["Event"] = relationship(back_populates="occurrences")
@@ -210,6 +218,7 @@ class Database:
     async def init(self) -> None:
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
+            await connection.run_sync(_migrate_abo_columns)
 
     async def session(self) -> AsyncIterator[AsyncSession]:
         async with self.sessions() as session:
@@ -217,3 +226,40 @@ class Database:
 
     async def close(self) -> None:
         await self.engine.dispose()
+
+
+def _migrate_abo_columns(connection) -> None:
+    """Add abo columns to existing databases (create_all does not alter tables)."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(connection)
+    if "events" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("events")}
+    is_postgres = connection.dialect.name == "postgresql"
+    bool_default = "FALSE" if is_postgres else "0"
+    str_default = "'none'"
+    timestamp_type = "TIMESTAMP" if is_postgres else "DATETIME"
+    additions = [
+        ("is_abo", f"BOOLEAN NOT NULL DEFAULT {bool_default}"),
+        ("abo_student_user_id", "INTEGER"),
+        ("abo_total_lessons", "INTEGER"),
+        ("abo_lesson_count", "INTEGER"),
+        ("abo_paid", f"BOOLEAN NOT NULL DEFAULT {bool_default}"),
+        ("abo_paid_at", timestamp_type),
+    ]
+    for name, ddl in additions:
+        if name not in existing:
+            connection.execute(text(f"ALTER TABLE events ADD COLUMN {name} {ddl}"))
+    event_cols = {col["name"] for col in inspect(connection).get_columns("events")}
+    if "abo_lesson_count" in event_cols and "abo_total_lessons" in event_cols:
+        connection.execute(text(
+            "UPDATE events SET abo_lesson_count = abo_total_lessons "
+            "WHERE abo_lesson_count IS NULL AND abo_total_lessons IS NOT NULL"
+        ))
+    if "event_occurrences" in inspector.get_table_names():
+        occ_cols = {col["name"] for col in inspector.get_columns("event_occurrences")}
+        if "payment_status" not in occ_cols:
+            connection.execute(text(
+                f"ALTER TABLE event_occurrences ADD COLUMN payment_status VARCHAR(10) NOT NULL DEFAULT {str_default}"
+            ))

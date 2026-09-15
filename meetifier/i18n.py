@@ -21,6 +21,7 @@ ORG_BTN = {
     "reschedule": {"en": "✏️ Reschedule", "ru": "✏️ Перенести", "sr": "✏️ Pomeri"},
     "cancel_event": {"en": "❌ Cancel event", "ru": "❌ Отменить событие", "sr": "❌ Otkaži događaj"},
     "confirmations": {"en": "✅ Confirmations", "ru": "✅ Подтверждения", "sr": "✅ Potvrde"},
+    "abos": {"en": "💳 Abos", "ru": "💳 Абонементы", "sr": "💳 Abonamenti"},
     "confirm_timing": {"en": "⏱ Attendance ask", "ru": "⏱ Запрос участия", "sr": "⏱ Zahtev prisustva"},
     "google_link": {"en": "🔗 Link Google", "ru": "🔗 Связать Google", "sr": "🔗 Poveži Google"},
     "google_map": {"en": "📎 Map to Google", "ru": "📎 Привязать к Google", "sr": "📎 Mapiraj na Google"},
@@ -150,6 +151,35 @@ MESSAGES: dict[str, dict[str, str]] = {
             "Created {count} date(s) for «{title}».\n"
             "Share this link with participants:\n{url}"
         ),
+        "abo_created_invite": (
+            "📦 Abo created: «{title}» — {occurrences} lessons scheduled, {abo_size} per abo.\n"
+            "Share this link with the student:\n{url}"
+        ),
+        "is_abo_prompt": "Is this a lesson package (abo)?",
+        "enter_abo_lesson_count": "How many lessons per abo? (e.g. 5):",
+        "btn_abo_yes": "Yes, abo",
+        "btn_abo_no": "No, regular event",
+        "no_abos": "No abos yet. Create one via ➕ New event.",
+        "choose_abo": "Choose an abo:",
+        "abo_header": "📦 {title} — abo {cycle_num}/{cycle_count} · {passed}/{total} passed",
+        "abo_cycle_summary": "Paid left: {paid_left} · Unpaid: {unpaid} · Unset: {unset}",
+        "abo_mark_cycle_paid": "Mark this abo paid",
+        "abo_marked_cycle_paid": "Current abo marked paid.",
+        "abo_mark_lesson_paid": "Mark paid",
+        "abo_mark_lesson_unpaid": "Mark unpaid",
+        "abo_mark_lesson_clear": "Clear payment",
+        "abo_lesson_updated": "Lesson payment updated.",
+        "abo_choose_lesson": "Choose a lesson to set payment:",
+        "abo_prev_cycle": "◀ Prev abo",
+        "abo_next_cycle": "Next abo ▶",
+        "abo_already_assigned": "This abo is already assigned to another student.",
+        "par_abo_summary": (
+            "📦 {title} — abo {cycle_num}/{cycle_count}\n"
+            "Progress: {passed}/{total} done · {remaining} lessons left in this abo"
+        ),
+        "par_abo_paid_left": "Paid lessons left: {count}",
+        "par_abo_unpaid": "Unpaid lessons in this abo: {count}",
+        "par_abo_unset": "Unset lessons in this abo: {count}",
         "choose_calendar_event": "Choose a calendar for the new event:",
         "choose_calendar_reschedule": "Choose a calendar to reschedule an event in:",
         "choose_calendar_confirmations": "Choose a calendar to view confirmations:",
@@ -456,6 +486,35 @@ MESSAGES: dict[str, dict[str, str]] = {
             "Создано дат: {count} для «{title}».\n"
             "Отправьте ссылку участникам:\n{url}"
         ),
+        "abo_created_invite": (
+            "📦 Абонемент создан: «{title}» — {occurrences} занятий, по {abo_size} в абонементе.\n"
+            "Отправьте ссылку ученику:\n{url}"
+        ),
+        "is_abo_prompt": "Это абонемент (пакет занятий)?",
+        "enter_abo_lesson_count": "Сколько занятий в одном абонементе? (напр. 5):",
+        "btn_abo_yes": "Да, абонемент",
+        "btn_abo_no": "Нет, обычное событие",
+        "no_abos": "Абонементов пока нет. Создайте через ➕ Новое событие.",
+        "choose_abo": "Выберите абонемент:",
+        "abo_header": "📦 {title} — абонемент {cycle_num}/{cycle_count} · {passed}/{total} прошло",
+        "abo_cycle_summary": "Оплачено осталось: {paid_left} · Не оплачено: {unpaid} · Без отметки: {unset}",
+        "abo_mark_cycle_paid": "Отметить этот абонемент оплаченным",
+        "abo_marked_cycle_paid": "Текущий абонемент отмечен как оплаченный.",
+        "abo_mark_lesson_paid": "Оплачено",
+        "abo_mark_lesson_unpaid": "Не оплачено",
+        "abo_mark_lesson_clear": "Сбросить",
+        "abo_lesson_updated": "Оплата занятия обновлена.",
+        "abo_choose_lesson": "Выберите занятие для отметки оплаты:",
+        "abo_prev_cycle": "◀ Пред. абонемент",
+        "abo_next_cycle": "След. абонемент ▶",
+        "abo_already_assigned": "Этот абонемент уже привязан к другому ученику.",
+        "par_abo_summary": (
+            "📦 {title} — абонемент {cycle_num}/{cycle_count}\n"
+            "Прогресс: {passed}/{total} прошло · осталось {remaining} в этом абонементе"
+        ),
+        "par_abo_paid_left": "Оплаченных занятий осталось: {count}",
+        "par_abo_unpaid": "Неоплаченных занятий в абонементе: {count}",
+        "par_abo_unset": "Без отметки в абонементе: {count}",
         "choose_calendar_event": "Выберите календарь для нового события:",
         "choose_calendar_reschedule": "Выберите календарь, чтобы перенести событие:",
         "choose_calendar_confirmations": "Выберите календарь для просмотра подтверждений:",
@@ -762,6 +821,35 @@ MESSAGES: dict[str, dict[str, str]] = {
             "Kreirano {count} datum(a) za «{title}».\n"
             "Podelite link sa učesnicima:\n{url}"
         ),
+        "abo_created_invite": (
+            "📦 Abonament kreiran: «{title}» — {occurrences} časova, {abo_size} po abonamentu.\n"
+            "Podelite link sa učenikom:\n{url}"
+        ),
+        "is_abo_prompt": "Da li je ovo paket časova (abonament)?",
+        "enter_abo_lesson_count": "Koliko časova u jednom abonamentu? (npr. 5):",
+        "btn_abo_yes": "Da, abonament",
+        "btn_abo_no": "Ne, običan događaj",
+        "no_abos": "Još nema abonamenata. Kreirajte preko ➕ Novi događaj.",
+        "choose_abo": "Izaberite abonament:",
+        "abo_header": "📦 {title} — abonament {cycle_num}/{cycle_count} · {passed}/{total} prošlo",
+        "abo_cycle_summary": "Plaćeno ostalo: {paid_left} · Neplaćeno: {unpaid} · Bez oznake: {unset}",
+        "abo_mark_cycle_paid": "Označi ovaj abonament plaćenim",
+        "abo_marked_cycle_paid": "Trenutni abonament označen kao plaćen.",
+        "abo_mark_lesson_paid": "Plaćeno",
+        "abo_mark_lesson_unpaid": "Neplaćeno",
+        "abo_mark_lesson_clear": "Obriši oznaku",
+        "abo_lesson_updated": "Plaćanje časa ažurirano.",
+        "abo_choose_lesson": "Izaberite čas za označavanje plaćanja:",
+        "abo_prev_cycle": "◀ Preth. abonament",
+        "abo_next_cycle": "Sledeći abonament ▶",
+        "abo_already_assigned": "Ovaj abonament je već povezan sa drugim učenikom.",
+        "par_abo_summary": (
+            "📦 {title} — abonament {cycle_num}/{cycle_count}\n"
+            "Napredak: {passed}/{total} završeno · ostalo {remaining} u ovom abonamentu"
+        ),
+        "par_abo_paid_left": "Plaćenih časova ostalo: {count}",
+        "par_abo_unpaid": "Neplaćenih časova u abonamentu: {count}",
+        "par_abo_unset": "Bez oznake u abonamentu: {count}",
         "choose_calendar_event": "Izaberite kalendar za novi događaj:",
         "choose_calendar_reschedule": "Izaberite kalendar da pomerite događaj:",
         "choose_calendar_confirmations": "Izaberite kalendar za pregled potvrda:",

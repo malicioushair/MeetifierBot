@@ -6,10 +6,12 @@ from sqlalchemy import select
 
 from meetifier.db import Calendar, Database, Event, EventConfirmation, EventOccurrence, NotificationJob, Subscription, utcnow
 from meetifier.recurrence import RecurrenceRule, generate_starts_utc
-from meetifier.service import (calendar_event_series, calendar_events, change_event, confirm_event,
-                               confirmations_for_event, create_calendar, create_events, display_time,
-                               event_occurrences, local_to_utc, make_invitation, month_bounds_utc,
-                               next_week_bounds_utc, owned_future_events, parse_minutes, set_subscription_state,
+from meetifier.service import (PAYMENT_PAID, PAYMENT_UNPAID, abo_cycle_occurrences, abo_occurrence_symbol,
+                               calendar_event_series, calendar_events, change_event, compute_abo_stats, confirm_event,
+                               confirmations_for_event, create_calendar, create_events, current_abo_cycle_index,
+                               display_time, event_all_occurrences, event_occurrences, local_to_utc, make_invitation,
+                               mark_abo_cycle_paid, month_bounds_utc, next_week_bounds_utc, owned_abo_events,
+                               owned_future_events, parse_minutes, set_occurrence_payment, set_subscription_state,
                                subscribe, week_bounds_utc)
 from meetifier.worker import process_due_jobs
 
@@ -406,3 +408,68 @@ async def test_worker_sends_participant_notification_without_confirm_button(db):
     assert job.state == "sent"
     assert bot.send_message.await_args.kwargs.get("reply_markup") is None
     assert "Notification" in bot.send_message.await_args.args[1]
+
+
+async def test_create_abo_with_cycles(db):
+    calendar = await prepared(db)
+    async with db.sessions() as session:
+        occurrences = await create_events(
+            session, 100, calendar.id, "Anna", "2030-01-01 18:00", 60, 12,
+            is_abo=True, abo_lesson_count=5,
+        )
+        event = await session.get(Event, occurrences[0].event_id)
+        assert event.is_abo is True
+        assert event.abo_lesson_count == 5
+        assert len(occurrences) == 12
+        await subscribe_participant(session, 100, 200, event.id)
+        all_occ = await event_all_occurrences(session, event.id)
+        stats = compute_abo_stats(event, all_occ)
+        assert stats.total == 5
+        assert stats.cycle_count == 3
+        assert stats.unset == 5
+        assert abo_occurrence_symbol(event, all_occ[0]) == ""
+        await mark_abo_cycle_paid(session, 100, event.id, 0)
+        cycle = abo_cycle_occurrences(event, all_occ, 0)
+        assert all(occ.payment_status == PAYMENT_PAID for occ in cycle)
+        stats = compute_abo_stats(event, all_occ, 0)
+        assert stats.paid_left == 5
+        assert abo_occurrence_symbol(event, all_occ[0]) == "💰"
+        await set_occurrence_payment(session, 100, all_occ[5].id, PAYMENT_UNPAID)
+        stats = compute_abo_stats(event, all_occ, 1)
+        assert stats.unpaid == 1
+        assert stats.unset == 4
+        abos = await owned_abo_events(session, 100)
+        assert len(abos) == 1
+
+
+async def test_abo_rejects_second_student(db):
+    calendar = await prepared(db)
+    async with db.sessions() as session:
+        occurrences = await create_events(
+            session, 100, calendar.id, "Anna", "2030-01-01 18:00", 60, 3,
+            is_abo=True, abo_lesson_count=3,
+        )
+        event_id = occurrences[0].event_id
+        await subscribe_participant(session, 100, 200, event_id)
+        invite = await make_invitation(session, 100, event_id)
+    async with db.sessions() as session:
+        with pytest.raises(ValueError, match="abo"):
+            await subscribe(session, 300, invite.token, 0)
+
+
+async def test_abo_passed_lessons(db):
+    calendar = await prepared(db)
+    async with db.sessions() as session:
+        occurrences = await create_events(
+            session, 100, calendar.id, "Anna", "2020-01-01 18:00", 60, 8,
+            is_abo=True, abo_lesson_count=5,
+        )
+        event = await session.get(Event, occurrences[0].event_id)
+        all_occ = await event_all_occurrences(session, event.id)
+        cycle_index = current_abo_cycle_index(event, all_occ)
+        assert cycle_index == 1
+        stats = compute_abo_stats(event, all_occ, cycle_index)
+        assert stats.passed == 3
+        assert abo_occurrence_symbol(event, all_occ[5]) == "✓"
+        await set_occurrence_payment(session, 100, all_occ[5].id, PAYMENT_PAID)
+        assert abo_occurrence_symbol(event, all_occ[5]) == "💰✓"

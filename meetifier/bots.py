@@ -12,31 +12,35 @@ from .config import Settings, format_timezone_offset, validate_timezone
 from .db import Calendar, Database, Event, EventOccurrence, GoogleCalendarLink, Subscription, User
 from .i18n import DEFAULT_LOCALE, LOCALES, no_events_message, normalize_locale, t
 from .keyboards import (DT_IGNORE, DT_PREFIX, FLOW_BACK_DATA, FLOW_CANCEL_DATA, ORG_INPUT_BLOCKLIST,
-                        PAR_INPUT_BLOCKLIST, calendars_keyboard, confirm_cancel_keyboard,
-                        confirm_google_adoption_keyboard, date_calendar_keyboard, edit_scope_keyboard,
-                        event_confirm_keyboard, event_range_keyboard, event_series_keyboard, flow_nav_keyboard,
-                        google_calendars_keyboard, google_onboarding_keyboard, hour_keyboard, invite_link_keyboard,
-                        locale_keyboard,
-                        minute_keyboard, monthly_pos_keyboard, nav_texts, occurrences_keyboard, org_texts,
-                        organizer_main_menu, owned_events_keyboard, par_texts, participant_main_menu,
-                        read_onboarding_keyboard, recurrence_pattern_keyboard, subscribed_events_keyboard,
-                        weekday_pick_keyboard, weekdays_keyboard)
+                        PAR_INPUT_BLOCKLIST, abo_cycle_keyboard, abo_events_keyboard, abo_lesson_payment_keyboard,
+                        abo_lessons_keyboard, calendars_keyboard,
+                        confirm_cancel_keyboard, confirm_google_adoption_keyboard, date_calendar_keyboard,
+                        edit_scope_keyboard, event_confirm_keyboard, event_range_keyboard, event_series_keyboard,
+                        flow_nav_keyboard, google_calendars_keyboard, google_onboarding_keyboard, hour_keyboard,
+                        invite_link_keyboard, is_abo_keyboard, locale_keyboard, minute_keyboard,
+                        monthly_pos_keyboard, nav_texts, occurrences_keyboard, org_texts, organizer_main_menu,
+                        owned_events_keyboard, par_texts, participant_main_menu, read_onboarding_keyboard,
+                        recurrence_pattern_keyboard, subscribed_events_keyboard, weekday_pick_keyboard,
+                        weekdays_keyboard)
 from .flow import discard_flow
 from .google_sync import (adopt_google_calendar, authorization_url, create_oauth_state, get_google_account,
                           google_enabled, import_google_calendar, link_google_calendar, list_google_calendars,
                           sync_changed_event, sync_created_events, sync_google_calendar)
 from .recurrence import RecurrenceRule, parse_local_naive
-from .service import (MENU_EVENT_RANGE_MODES, calendar_event_series, calendar_events, change_event, confirm_event,
-                      confirmations_for_event, confirmed_occurrence_ids, create_calendar, create_events,
-                      dismiss_google_prompt, display_time, ensure_default_calendar, event_occurrences, get_user_locale,
-                      invitation_event, make_invitation, mark_org_onboarding_seen, owned_event, owned_future_events,
-                      set_confirmation_hours, set_locale, set_reminders, set_subscription_state, set_timezone,
-                      should_offer_org_onboarding, should_show_google_onboarding, subscribe, upcoming_for_user_with_status)
-from .states import (OrganizerCancelEvent, OrganizerConfirmTiming, OrganizerConfirmations, OrganizerEvents,
-                     OrganizerGoogleAdopt, OrganizerGoogleImport, OrganizerGoogleMap, OrganizerGoogleSync,
-                     OrganizerInvite, OrganizerNewCalendar, OrganizerNewEvent, OrganizerReschedule,
-                     ParticipantConfirmPick, ParticipantMute, ParticipantReminders, ParticipantTimezone,
-                     ParticipantUnmute, ParticipantUnsubscribe, ParticipantUpcoming)
+from .service import (MENU_EVENT_RANGE_MODES, PAYMENT_NONE, PAYMENT_PAID, PAYMENT_UNPAID, abo_cycle_occurrences,
+                      abo_occurrence_symbol, calendar_event_series, calendar_events, change_event, compute_abo_stats,
+                      confirm_event, confirmations_for_event, confirmed_occurrence_ids, create_calendar, create_events,
+                      current_abo_cycle_index, dismiss_google_prompt, display_time, ensure_default_calendar,
+                      event_all_occurrences, event_occurrences, get_user_locale, invitation_event, make_invitation,
+                      mark_abo_cycle_paid, mark_org_onboarding_seen, owned_abo_events, owned_event, owned_future_events,
+                      set_confirmation_hours, set_locale, set_occurrence_payment, set_reminders, set_subscription_state,
+                      set_timezone, should_offer_org_onboarding, should_show_google_onboarding, subscribe,
+                      upcoming_for_user_with_status)
+from .states import (OrganizerAboManage, OrganizerCancelEvent, OrganizerConfirmTiming, OrganizerConfirmations,
+                     OrganizerEvents, OrganizerGoogleAdopt, OrganizerGoogleImport, OrganizerGoogleMap,
+                     OrganizerGoogleSync, OrganizerInvite, OrganizerNewCalendar, OrganizerNewEvent,
+                     OrganizerReschedule, ParticipantConfirmPick, ParticipantMute, ParticipantReminders,
+                     ParticipantTimezone, ParticipantUnmute, ParticipantUnsubscribe, ParticipantUpcoming)
 
 
 def participant_display_name(user) -> str:
@@ -123,13 +127,51 @@ def occurrence_button_items(occurrences: list[EventOccurrence], timezone_offset:
     return items
 
 
+def format_abo_series_detail(
+    event: Event,
+    occurrences: list[EventOccurrence],
+    calendar: Calendar,
+    locale: str,
+    cycle_index: int | None = None,
+) -> str:
+    cycle_index = cycle_index if cycle_index is not None else current_abo_cycle_index(event, occurrences)
+    cycle_occ = abo_cycle_occurrences(event, occurrences, cycle_index)
+    stats = compute_abo_stats(event, occurrences, cycle_index)
+    lines = [
+        t(
+            locale, "abo_header",
+            title=event.title,
+            cycle_num=stats.cycle_index + 1,
+            cycle_count=stats.cycle_count,
+            passed=stats.passed,
+            total=stats.total,
+        ),
+        t(
+            locale, "abo_cycle_summary",
+            paid_left=stats.paid_left,
+            unpaid=stats.unpaid,
+            unset=stats.unset,
+        ),
+    ]
+    for occ in cycle_occ:
+        sym = abo_occurrence_symbol(event, occ)
+        suffix = f"  {sym}" if sym else ""
+        lines.append(f"  {display_time(occ.start_utc, calendar.timezone)}{suffix}")
+    return "\n".join(lines)
+
+
 def format_organizer_events(occurrences: list[EventOccurrence], calendar: Calendar, range_mode: str, locale: str) -> str:
     if not occurrences:
         return no_events_message(locale, range_mode)
-    return "\n".join(
-        f"{occ.id}: {occ.event.title} — {display_time(occ.start_utc, calendar.timezone)} [{occ.status}]"
-        for occ in occurrences
-    )
+    lines = []
+    for occ in occurrences:
+        sym = f"  {abo_occurrence_symbol(occ.event, occ)}" if occ.event.is_abo else ""
+        prefix = "📦 " if occ.event.is_abo else ""
+        lines.append(
+            f"{occ.id}: {prefix}{occ.event.title} — "
+            f"{display_time(occ.start_utc, calendar.timezone)}{sym} [{occ.status}]"
+        )
+    return "\n".join(lines)
 
 
 def format_series_occurrences(event: Event, occurrences: list[EventOccurrence], calendar: Calendar,
@@ -137,6 +179,8 @@ def format_series_occurrences(event: Event, occurrences: list[EventOccurrence], 
                               confirmed_ids: set[int] | None = None) -> str:
     if not occurrences:
         return no_events_message(locale, range_mode)
+    if event.is_abo:
+        return format_abo_series_detail(event, occurrences, calendar, locale)
     confirmed_ids = confirmed_ids or set()
     lines = [t(locale, "event_dates_header", title=event.title)]
     for occ in occurrences:
@@ -154,10 +198,23 @@ def format_participant_events(rows: list[tuple[EventOccurrence, Calendar, bool]]
     lines = []
     for occurrence, calendar, confirmed in rows:
         status = " ✅" if confirmed else ""
+        sym = f" {abo_occurrence_symbol(occurrence.event, occurrence)}" if occurrence.event.is_abo else ""
+        prefix = "📦 " if occurrence.event.is_abo else ""
         lines.append(
-            f"{occurrence.event.title} — {display_time(occurrence.start_utc, timezone_name)} ({calendar.name}){status}"
+            f"{prefix}{occurrence.event.title} — "
+            f"{display_time(occurrence.start_utc, timezone_name)} ({calendar.name}){sym}{status}"
         )
     return "\n".join(lines)
+
+
+def build_recurrence_rule(data: dict) -> RecurrenceRule:
+    if data.get("pattern") == "weekly":
+        return RecurrenceRule.weekly(
+            weekdays=list(data["weekdays"]), interval=int(data["interval"]), count=int(data["count"]),
+        )
+    return RecurrenceRule.monthly_nth(
+        weekday=int(data["monthly_weekday"]), bysetpos=int(data["monthly_pos"]), count=int(data["count"]),
+    )
 
 
 async def mirror_created_events(db: Database, settings: Settings, calendar_id: int,
@@ -513,6 +570,43 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                     weekday_pick_keyboard("o_mwd", locale),
                     locale, with_reply_nav=isinstance(target, Message),
                 )
+        elif current == OrganizerNewEvent.is_abo.state:
+            await state.set_state(OrganizerNewEvent.count)
+            await state.update_data(is_abo=None)
+            await prompt_text(target, t(locale, "enter_occurrence_count"), locale)
+        elif current == OrganizerNewEvent.abo_lesson_count.state:
+            await state.set_state(OrganizerNewEvent.is_abo)
+            await state.update_data(abo_lesson_count=None)
+            await prompt_inline(
+                target, t(locale, "is_abo_prompt"), is_abo_keyboard(locale),
+                locale, with_reply_nav=isinstance(target, Message),
+            )
+        elif current == OrganizerAboManage.occurrence.state:
+            if data.get("abo_lesson_pick"):
+                await state.update_data(abo_lesson_pick=None)
+                await show_abo_lesson_list(target, state, locale)
+            else:
+                event_id = data.get("abo_event_id")
+                cycle_index = data.get("abo_cycle_index")
+                await state.set_state(OrganizerAboManage.event)
+                await show_abo_detail(
+                    target, int(event_id), locale,
+                    int(cycle_index) if cycle_index is not None else None,
+                )
+        elif current == OrganizerAboManage.event.state:
+            if data.get("abo_event_id"):
+                await state.update_data(abo_event_id=None, abo_cycle_index=None, abo_lesson_pick=None)
+                async with db.sessions() as session:
+                    items = await owned_abo_events(session, uid)
+                if not items:
+                    await cancel()
+                    return
+                await prompt_inline(
+                    target, t(locale, "choose_abo"), abo_events_keyboard(items, locale),
+                    locale, with_reply_nav=isinstance(target, Message),
+                )
+            else:
+                await cancel()
         elif current == OrganizerReschedule.calendar.state:
             await cancel()
         elif current == OrganizerReschedule.series.state:
@@ -953,11 +1047,27 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         _, range_mode, series_id = callback.data.split(":", 2)
         locale = await locale_for(callback.from_user.id)
         async with db.sessions() as session:
-            event = await session.get(Event, int(series_id))
+            event = await owned_event(session, callback.from_user.id, int(series_id))
+            if not event:
+                await state.clear()
+                await callback.message.edit_text(no_events_message(locale, range_mode))
+                await restore_menu(callback, locale)
+                await callback.answer()
+                return
             calendar = await session.get(Calendar, event.calendar_id)
-            rows = await event_occurrences(session, event.id, range_mode, calendar.timezone)
+            if event.is_abo:
+                rows = await event_all_occurrences(session, event.id)
+            else:
+                rows = await event_occurrences(session, event.id, range_mode, calendar.timezone)
         await state.clear()
-        await callback.message.edit_text(format_series_occurrences(event, rows, calendar, range_mode, locale))
+        text = format_series_occurrences(event, rows, calendar, range_mode, locale)
+        if event.is_abo:
+            cycle_index = current_abo_cycle_index(event, rows)
+            stats = compute_abo_stats(event, rows, cycle_index)
+            markup = abo_cycle_keyboard(event.id, cycle_index, stats.cycle_count, locale)
+        else:
+            markup = None
+        await callback.message.edit_text(text, reply_markup=markup)
         await restore_menu(callback, locale)
         await callback.answer()
 
@@ -1628,7 +1738,15 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             message, t(locale, "choose_pattern"), recurrence_pattern_keyboard(locale), locale, with_reply_nav=True,
         )
 
-    async def finish_new_event(message_or_cb, state: FSMContext, rule: RecurrenceRule, locale: str) -> None:
+    async def finish_new_event(
+        message_or_cb,
+        state: FSMContext,
+        rule: RecurrenceRule,
+        locale: str,
+        *,
+        is_abo: bool = False,
+        abo_lesson_count: int | None = None,
+    ) -> None:
         data = await state.get_data()
         onboard_setup = data.get("onboard_setup")
         uid = message_or_cb.from_user.id
@@ -1637,11 +1755,20 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
             async with db.sessions() as session:
                 occurrences = await create_events(
                     session, uid, data["calendar_id"], data["title"],
-                    data["start"], int(data["duration"]), rule=rule)
+                    data["start"], int(data["duration"]), rule=rule,
+                    is_abo=is_abo, abo_lesson_count=abo_lesson_count,
+                )
                 invitation = await make_invitation(session, uid, occurrences[0].event_id)
             await mirror_created_events(db, settings, data["calendar_id"], occurrences)
             url = invite_url(settings, invitation.token)
-            text = t(locale, "events_created_invite", count=len(occurrences), title=data["title"], url=url)
+            if is_abo:
+                text = t(
+                    locale, "abo_created_invite",
+                    occurrences=len(occurrences), abo_size=abo_lesson_count,
+                    title=data["title"], url=url,
+                )
+            else:
+                text = t(locale, "events_created_invite", count=len(occurrences), title=data["title"], url=url)
             invite_markup = invite_link_keyboard(url, locale)
             await state.clear()
             if isinstance(message_or_cb, CallbackQuery):
@@ -1661,7 +1788,9 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
                     await target_message.answer(t(locale, "main_menu"), reply_markup=organizer_main_menu(locale))
         except (ValueError, PermissionError) as exc:
             current = await state.get_state()
-            if current == OrganizerNewEvent.count.state:
+            if current == OrganizerNewEvent.abo_lesson_count.state:
+                retry = t(locale, "enter_abo_lesson_count")
+            elif current == OrganizerNewEvent.count.state:
                 retry = t(locale, "enter_occurrence_count")
             elif current == OrganizerNewEvent.pattern.state or data.get("pattern") == "once":
                 retry = t(locale, "choose_pattern")
@@ -1770,16 +1899,207 @@ def build_organizer_router(db: Database, settings: Settings, participant_bot: Bo
         locale = await locale_for(message.from_user.id)
         try:
             count = int(message.text.strip())
-            if data.get("pattern") == "weekly":
-                rule = RecurrenceRule.weekly(
-                    weekdays=list(data["weekdays"]), interval=int(data["interval"]), count=count)
-            else:
-                rule = RecurrenceRule.monthly_nth(
-                    weekday=int(data["monthly_weekday"]), bysetpos=int(data["monthly_pos"]), count=count)
-            await finish_new_event(message, state, rule, locale)
-        except (ValueError, PermissionError, KeyError) as exc:
+            if not 1 <= count <= 104:
+                raise ValueError("Count must be 1..104")
+            await state.update_data(count=count)
+            await state.set_state(OrganizerNewEvent.is_abo)
+            await prompt_inline(
+                message, t(locale, "is_abo_prompt"), is_abo_keyboard(locale), locale, with_reply_nav=True,
+            )
+        except (ValueError, KeyError) as exc:
             detail = exc if not isinstance(exc, KeyError) else ValueError("Incomplete recurrence data")
             await flow_err(message, locale, detail, t(locale, "enter_occurrence_count"))
+
+    @router.callback_query(F.data.startswith("o_new_abo:"))
+    async def new_event_is_abo(callback: CallbackQuery, state: FSMContext) -> None:
+        locale = await locale_for(callback.from_user.id)
+        is_abo = callback.data.endswith(":yes")
+        if is_abo:
+            await state.set_state(OrganizerNewEvent.abo_lesson_count)
+            await callback.message.edit_text(t(locale, "enter_abo_lesson_count"))
+            await callback.message.answer("\u2060", reply_markup=flow_nav_keyboard(locale))
+            await callback.answer()
+            return
+        try:
+            rule = build_recurrence_rule(await state.get_data())
+            await finish_new_event(callback, state, rule, locale, is_abo=False)
+        except (ValueError, PermissionError, KeyError) as exc:
+            detail = exc if not isinstance(exc, KeyError) else ValueError("Incomplete recurrence data")
+            await callback.message.answer(t(locale, "error", error=detail))
+            await callback.answer()
+
+    @router.message(OrganizerNewEvent.abo_lesson_count, ~F.text.in_(ORG_INPUT_BLOCKLIST))
+    async def new_event_abo_lesson_count(message: Message, state: FSMContext) -> None:
+        locale = await locale_for(message.from_user.id)
+        data = await state.get_data()
+        try:
+            abo_size = int(message.text.strip())
+            if not 1 <= abo_size <= 104:
+                raise ValueError("Abo size must be 1..104")
+            rule = build_recurrence_rule(data)
+            await finish_new_event(
+                message, state, rule, locale, is_abo=True, abo_lesson_count=abo_size,
+            )
+        except (ValueError, PermissionError, KeyError) as exc:
+            detail = exc if not isinstance(exc, KeyError) else ValueError("Incomplete recurrence data")
+            await flow_err(message, locale, detail, t(locale, "enter_abo_lesson_count"))
+
+    @router.message(Command("abos"))
+    @router.message(F.text.in_(org_texts("abos")))
+    async def abos_start(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        locale = await locale_for(message.from_user.id)
+        async with db.sessions() as session:
+            items = await owned_abo_events(session, message.from_user.id)
+        if not items:
+            await message.answer(t(locale, "no_abos"), reply_markup=organizer_main_menu(locale))
+            return
+        await state.set_state(OrganizerAboManage.event)
+        await prompt_inline(
+            message, t(locale, "choose_abo"), abo_events_keyboard(items, locale), locale, with_reply_nav=True,
+        )
+
+    async def show_abo_detail(
+        target: Message | CallbackQuery,
+        event_id: int,
+        locale: str,
+        cycle_index: int | None = None,
+        *,
+        callback_answered: bool = False,
+    ) -> None:
+        async with db.sessions() as session:
+            event = await owned_event(session, target.from_user.id, event_id)
+            if not event or not event.is_abo:
+                text, markup = t(locale, "no_abos"), None
+            else:
+                calendar = await session.get(Calendar, event.calendar_id)
+                rows = await event_all_occurrences(session, event.id)
+                cycle_index = cycle_index if cycle_index is not None else current_abo_cycle_index(event, rows)
+                stats = compute_abo_stats(event, rows, cycle_index)
+                text = format_abo_series_detail(event, rows, calendar, locale, cycle_index)
+                markup = abo_cycle_keyboard(event.id, cycle_index, stats.cycle_count, locale)
+        if isinstance(target, CallbackQuery):
+            await target.message.edit_text(text, reply_markup=markup)
+            if not callback_answered:
+                await target.answer()
+        else:
+            await target.answer(text, reply_markup=markup)
+
+    async def show_abo_lesson_list(target: Message | CallbackQuery, state: FSMContext, locale: str) -> None:
+        data = await state.get_data()
+        event_id = int(data["abo_event_id"])
+        cycle_index = int(data.get("abo_cycle_index", 0))
+        async with db.sessions() as session:
+            event = await owned_event(session, target.from_user.id, event_id)
+            if not event or not event.is_abo:
+                text, markup = t(locale, "no_abos"), None
+            else:
+                calendar = await session.get(Calendar, event.calendar_id)
+                rows = await event_all_occurrences(session, event.id)
+                cycle_occ = abo_cycle_occurrences(event, rows, cycle_index)
+                text = t(locale, "abo_choose_lesson")
+                markup = abo_lessons_keyboard(event, cycle_occ, calendar, cycle_index, locale)
+        await state.set_state(OrganizerAboManage.occurrence)
+        if isinstance(target, CallbackQuery):
+            await target.message.edit_text(text, reply_markup=markup)
+            await target.answer()
+        else:
+            await target.answer(text, reply_markup=markup)
+
+    @router.callback_query(F.data.startswith("o_abo_evt:"))
+    async def abo_event_pick(callback: CallbackQuery, state: FSMContext) -> None:
+        event_id = int(callback.data.split(":", 1)[1])
+        locale = await locale_for(callback.from_user.id)
+        await state.set_state(OrganizerAboManage.event)
+        await state.update_data(abo_event_id=event_id, abo_lesson_pick=None)
+        await show_abo_detail(callback, event_id, locale)
+
+    @router.callback_query(F.data.startswith("o_abo_cycle:"))
+    async def abo_cycle_nav(callback: CallbackQuery, state: FSMContext) -> None:
+        _, event_id, cycle_index = callback.data.split(":", 2)
+        locale = await locale_for(callback.from_user.id)
+        await state.update_data(abo_event_id=int(event_id), abo_cycle_index=int(cycle_index))
+        await show_abo_detail(callback, int(event_id), locale, int(cycle_index))
+
+    @router.callback_query(F.data.startswith("o_abo_cycle_pay:"))
+    async def abo_mark_cycle_paid_cb(callback: CallbackQuery, state: FSMContext) -> None:
+        _, event_id, cycle_index = callback.data.split(":", 2)
+        locale = await locale_for(callback.from_user.id)
+        try:
+            async with db.sessions() as session:
+                await mark_abo_cycle_paid(session, callback.from_user.id, int(event_id), int(cycle_index))
+            await callback.answer(t(locale, "abo_marked_cycle_paid"))
+            await show_abo_detail(
+                callback, int(event_id), locale, int(cycle_index), callback_answered=True,
+            )
+        except PermissionError as exc:
+            await callback.answer(str(exc), show_alert=True)
+
+    @router.callback_query(F.data.startswith("o_abo_pick_lesson:"))
+    async def abo_pick_lesson(callback: CallbackQuery, state: FSMContext) -> None:
+        _, event_id, cycle_index = callback.data.split(":", 2)
+        locale = await locale_for(callback.from_user.id)
+        async with db.sessions() as session:
+            event = await owned_event(session, callback.from_user.id, int(event_id))
+            if not event or not event.is_abo:
+                await callback.answer(t(locale, "no_abos"), show_alert=True)
+                return
+            calendar = await session.get(Calendar, event.calendar_id)
+            rows = await event_all_occurrences(session, event.id)
+            cycle_occ = abo_cycle_occurrences(event, rows, int(cycle_index))
+        await state.set_state(OrganizerAboManage.occurrence)
+        await state.update_data(abo_event_id=int(event_id), abo_cycle_index=int(cycle_index))
+        await callback.message.edit_text(
+            t(locale, "abo_choose_lesson"),
+            reply_markup=abo_lessons_keyboard(event, cycle_occ, calendar, int(cycle_index), locale),
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("o_abo_lesson:"))
+    async def abo_lesson_pick(callback: CallbackQuery, state: FSMContext) -> None:
+        occurrence_id = int(callback.data.split(":", 1)[1])
+        locale = await locale_for(callback.from_user.id)
+        await state.update_data(abo_lesson_pick=occurrence_id)
+        await callback.message.edit_text(
+            t(locale, "abo_choose_lesson"),
+            reply_markup=abo_lesson_payment_keyboard(occurrence_id, locale),
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("o_abo_pay_lesson:"))
+    async def abo_lesson_paid(callback: CallbackQuery, state: FSMContext) -> None:
+        await _abo_set_lesson_payment(callback, state, PAYMENT_PAID)
+
+    @router.callback_query(F.data.startswith("o_abo_unpay_lesson:"))
+    async def abo_lesson_unpaid(callback: CallbackQuery, state: FSMContext) -> None:
+        await _abo_set_lesson_payment(callback, state, PAYMENT_UNPAID)
+
+    @router.callback_query(F.data.startswith("o_abo_clear_lesson:"))
+    async def abo_lesson_clear(callback: CallbackQuery, state: FSMContext) -> None:
+        await _abo_set_lesson_payment(callback, state, PAYMENT_NONE)
+
+    async def _abo_set_lesson_payment(callback: CallbackQuery, state: FSMContext, payment_status: str) -> None:
+        occurrence_id = int(callback.data.split(":", 1)[1])
+        locale = await locale_for(callback.from_user.id)
+        data = await state.get_data()
+        try:
+            async with db.sessions() as session:
+                occurrence = await set_occurrence_payment(
+                    session, callback.from_user.id, occurrence_id, payment_status,
+                )
+                event_id = occurrence.event_id
+            await callback.answer(t(locale, "abo_lesson_updated"))
+            cycle_index = data.get("abo_cycle_index")
+            if cycle_index is None:
+                async with db.sessions() as session:
+                    event = await session.get(Event, event_id)
+                    rows = await event_all_occurrences(session, event_id)
+                    cycle_index = current_abo_cycle_index(event, rows)
+            await show_abo_detail(
+                callback, event_id, locale, int(cycle_index), callback_answered=True,
+            )
+        except (PermissionError, ValueError) as exc:
+            await callback.answer(str(exc), show_alert=True)
 
     @router.message(Command("reschedule"))
     @router.message(F.text.in_(org_texts("reschedule")))
@@ -2175,7 +2495,8 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
             await callback.message.edit_text(t(locale, "subscribed", name=event.title))
             await callback.message.answer(t(locale, "main_menu"), reply_markup=participant_main_menu(locale))
         except ValueError as exc:
-            await callback.message.edit_text(str(exc))
+            msg = t(locale, "abo_already_assigned") if "abo" in str(exc).lower() else str(exc)
+            await callback.message.edit_text(msg)
         await callback.answer()
 
     @router.message(CommandStart())
@@ -2447,14 +2768,41 @@ def build_participant_router(db: Database, settings: Settings, organizer_bot: Bo
                 await state.clear()
                 await restore_menu(callback, locale)
 
+    async def format_subscription_entry(
+        session, event: Event, sub: Subscription, locale: str,
+    ) -> str:
+        if not event.is_abo:
+            status = t(locale, "sub_muted") if sub.muted else t(locale, "sub_active")
+            return f"{event.id}: {event.title} [{status}]"
+        occurrences = await event_all_occurrences(session, event.id)
+        stats = compute_abo_stats(event, occurrences)
+        lines = [
+            t(
+                locale, "par_abo_summary",
+                title=event.title,
+                cycle_num=stats.cycle_index + 1,
+                cycle_count=stats.cycle_count,
+                passed=stats.passed,
+                total=stats.total,
+                remaining=stats.remaining,
+            ),
+            t(locale, "par_abo_paid_left", count=stats.paid_left),
+            t(locale, "par_abo_unpaid", count=stats.unpaid),
+            t(locale, "par_abo_unset", count=stats.unset),
+        ]
+        if sub.muted:
+            lines.append(f"[{t(locale, 'sub_muted')}]")
+        return "\n".join(lines)
+
     async def reply_subscriptions(message: Message, locale: str) -> None:
         async with db.sessions() as session:
             data = await fetch_subscribed_events(session, message.from_user.id)
-        await message.answer(
-            "\n".join(
-                f"{event.id}: {event.title} [{t(locale, 'sub_muted') if sub.muted else t(locale, 'sub_active')}]"
+            lines = [
+                await format_subscription_entry(session, event, sub, locale)
                 for event, sub in data
-            ) or t(locale, "no_subscriptions"),
+            ]
+        await message.answer(
+            "\n\n".join(lines) or t(locale, "no_subscriptions"),
             reply_markup=participant_main_menu(locale),
         )
 
